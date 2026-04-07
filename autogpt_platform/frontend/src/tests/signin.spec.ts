@@ -1,6 +1,6 @@
 // auth.spec.ts
 
-import test from "@playwright/test";
+import { test } from "./coverage-fixture";
 import { BuildPage } from "./pages/build.page";
 import { LoginPage } from "./pages/login.page";
 import { hasUrl, isHidden, isVisible } from "./utils/assertion";
@@ -172,7 +172,7 @@ test("multi-tab logout with WebSocket cleanup", async ({ context }) => {
   await page2.close();
 });
 
-test("logged in user is redirected from /login to /library", async ({
+test("logged in user is redirected from /login to /copilot", async ({
   page,
 }) => {
   const testUser = await getTestUser();
@@ -182,10 +182,10 @@ test("logged in user is redirected from /login to /library", async ({
   await hasUrl(page, "/marketplace");
 
   await page.goto("/login");
-  await hasUrl(page, "/library?sort=updatedAt");
+  await hasUrl(page, "/copilot");
 });
 
-test("logged in user is redirected from /signup to /library", async ({
+test("logged in user is redirected from /signup to /copilot", async ({
   page,
 }) => {
   const testUser = await getTestUser();
@@ -195,5 +195,5 @@ test("logged in user is redirected from /signup to /library", async ({
   await hasUrl(page, "/marketplace");
 
   await page.goto("/signup");
-  await hasUrl(page, "/library?sort=updatedAt");
+  await hasUrl(page, "/copilot");
 });

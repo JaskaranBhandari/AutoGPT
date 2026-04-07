@@ -1,4 +1,4 @@
-import { test } from "@playwright/test";
+import { test } from "./coverage-fixture";
 import { getTestUserWithLibraryAgents } from "./credentials";
 import { LoginPage } from "./pages/login.page";
 import { MarketplacePage } from "./pages/marketplace.page";
@@ -69,12 +69,11 @@ test.describe("Marketplace Creator Page – Basic Functionality", () => {
       await marketplacePage.getFirstCreatorProfile(page);
     await firstCreatorProfile.click();
     await page.waitForURL("**/marketplace/creator/**");
-    await page.waitForLoadState("networkidle").catch(() => {});
 
     const firstAgent = page
       .locator('[data-testid="store-card"]:visible')
       .first();
-    await firstAgent.waitFor({ state: "visible", timeout: 30000 });
+    await firstAgent.waitFor({ state: "visible", timeout: 15000 });
 
     await firstAgent.click();
     await page.waitForURL("**/marketplace/agent/**");

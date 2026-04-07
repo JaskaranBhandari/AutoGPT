@@ -1,45 +1,172 @@
-import type { User } from "@supabase/supabase-js";
+import type { UIMessage } from "ai";
 
-export function getGreetingName(user?: User | null): string {
-  if (!user) return "there";
-  const metadata = user.user_metadata as Record<string, unknown> | undefined;
-  const fullName = metadata?.full_name;
-  const name = metadata?.name;
-  if (typeof fullName === "string" && fullName.trim()) {
-    return fullName.split(" ")[0];
-  }
-  if (typeof name === "string" && name.trim()) {
-    return name.split(" ")[0];
-  }
-  if (user.email) {
-    return user.email.split("@")[0];
-  }
-  return "there";
+export const ORIGINAL_TITLE = "AutoGPT";
+
+/**
+ * Build the document title showing how many sessions are ready.
+ * Returns the base title when count is 0.
+ */
+export function formatNotificationTitle(count: number): string {
+  return count > 0
+    ? `(${count}) AutoPilot is ready - ${ORIGINAL_TITLE}`
+    : ORIGINAL_TITLE;
 }
 
-export function buildCopilotChatUrl(prompt: string): string {
-  const trimmed = prompt.trim();
-  if (!trimmed) return "/copilot/chat";
-  const encoded = encodeURIComponent(trimmed);
-  return `/copilot/chat?prompt=${encoded}`;
+/**
+ * Safely parse a JSON string (from localStorage) into a `Set<string>` of
+ * session IDs. Returns an empty set for `null`, malformed, or non-array values.
+ */
+export function parseSessionIDs(raw: string | null | undefined): Set<string> {
+  if (!raw) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set<string>(parsed.filter((v) => typeof v === "string"))
+      : new Set();
+  } catch {
+    return new Set();
+  }
 }
 
-export function getQuickActions(): string[] {
-  return [
-    "I don't know where to start, just ask me stuff",
-    "I do the same thing every week and it's killing me",
-    "Help me find where I'm wasting my time",
-  ];
+/**
+ * Check whether a refetchSession result indicates the backend still has an
+ * active SSE stream for this session.
+ */
+export function hasActiveBackendStream(result: { data?: unknown }): boolean {
+  const d = result.data;
+  return (
+    d != null &&
+    typeof d === "object" &&
+    "status" in d &&
+    d.status === 200 &&
+    "data" in d &&
+    d.data != null &&
+    typeof d.data === "object" &&
+    "active_stream" in d.data &&
+    !!d.data.active_stream
+  );
 }
 
-export function getInputPlaceholder(width?: number) {
-  if (!width) return "What's your role and what eats up most of your day?";
+/** Mark any in-progress tool parts as completed/errored so spinners stop. */
+export function resolveInProgressTools(
+  messages: UIMessage[],
+  outcome: "completed" | "cancelled",
+): UIMessage[] {
+  return messages.map((msg) => ({
+    ...msg,
+    parts: msg.parts.map((part) =>
+      "state" in part &&
+      (part.state === "input-streaming" || part.state === "input-available")
+        ? outcome === "cancelled"
+          ? { ...part, state: "output-error" as const, errorText: "Cancelled" }
+          : { ...part, state: "output-available" as const, output: "" }
+        : part,
+    ),
+  }));
+}
 
-  if (width < 500) {
-    return "I'm a chef and I hate...";
+/**
+ * Extract the user-visible text from the arguments passed to `sendMessage`.
+ * Handles both `sendMessage("hello")` and `sendMessage({ text: "hello" })`.
+ */
+export function extractSendMessageText(firstArg: unknown): string {
+  if (firstArg && typeof firstArg === "object" && "text" in firstArg)
+    return (firstArg as { text: string }).text;
+  return String(firstArg ?? "");
+}
+
+interface SuppressDuplicateArgs {
+  text: string;
+  isReconnectScheduled: boolean;
+  lastSubmittedText: string | null;
+  messages: UIMessage[];
+}
+
+/**
+ * Reason a sendMessage was suppressed, or ``null`` to pass through.
+ *
+ * - ``"reconnecting"``: the stream is reconnecting; the caller should
+ *   notify the user (the UI may not yet reflect the disabled state).
+ * - ``"duplicate"``: the same text was just submitted and echoed back
+ *   by the session — safe to silently drop (user double-clicked).
+ */
+export type SuppressReason = "reconnecting" | "duplicate" | null;
+
+/**
+ * Determine whether a sendMessage call should be suppressed to prevent
+ * duplicate POSTs during reconnect cycles or re-submits of the same text.
+ *
+ * Returns the reason so callers can surface user-visible feedback when
+ * the suppression isn't just a silent duplicate.
+ */
+export function getSendSuppressionReason({
+  text,
+  isReconnectScheduled,
+  lastSubmittedText,
+  messages,
+}: SuppressDuplicateArgs): SuppressReason {
+  if (isReconnectScheduled) return "reconnecting";
+
+  if (text && lastSubmittedText === text) {
+    const lastUserMsg = messages.filter((m) => m.role === "user").pop();
+    const lastUserText = lastUserMsg?.parts
+      ?.map((p) => ("text" in p ? p.text : ""))
+      .join("")
+      .trim();
+    if (lastUserText === text) return "duplicate";
   }
-  if (width <= 1080) {
-    return "What's your role and what eats up most of your day?";
-  }
-  return "What's your role and what eats up most of your day? e.g. 'I'm a recruiter and I hate...'";
+
+  return null;
+}
+
+/**
+ * Backwards-compatible boolean wrapper for ``getSendSuppressionReason``.
+ *
+ * @deprecated Call ``getSendSuppressionReason`` directly so callers can
+ * distinguish between reconnect and duplicate suppression.
+ */
+export function shouldSuppressDuplicateSend(
+  args: SuppressDuplicateArgs,
+): boolean {
+  return getSendSuppressionReason(args) !== null;
+}
+
+/**
+ * Deduplicate messages by ID and by consecutive content fingerprint.
+ *
+ * ID dedup catches exact duplicates within the same source.
+ * Content dedup only compares each assistant message to its **immediate
+ * predecessor** — this catches hydration/stream boundary duplicates (where
+ * the same content appears under different IDs) without accidentally
+ * removing legitimately repeated assistant responses that are far apart.
+ */
+export function deduplicateMessages(messages: UIMessage[]): UIMessage[] {
+  const seenIds = new Set<string>();
+  let lastAssistantFingerprint = "";
+
+  return messages.filter((msg) => {
+    if (seenIds.has(msg.id)) return false;
+    seenIds.add(msg.id);
+
+    if (msg.role === "assistant") {
+      const fingerprint = msg.parts
+        .map(
+          (p) =>
+            ("text" in p && p.text) ||
+            ("toolCallId" in p && p.toolCallId) ||
+            "",
+        )
+        .join("|");
+
+      // Only dedup if this assistant message is identical to the previous one
+      if (fingerprint && fingerprint === lastAssistantFingerprint) return false;
+      if (fingerprint) lastAssistantFingerprint = fingerprint;
+    } else {
+      // Reset on non-assistant messages so that identical assistant responses
+      // separated by a user message (e.g. "Done!" → user → "Done!") are kept.
+      lastAssistantFingerprint = "";
+    }
+
+    return true;
+  });
 }
