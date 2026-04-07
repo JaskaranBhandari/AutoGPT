@@ -10,8 +10,8 @@ coverage:
         informational: true
     patch:
       default:
-        target: 80%
-        informational: true
+        target: 95%
+        if_not_found: success
 
 flags:
   platform-backend:
@@ -38,8 +38,7 @@ component_management:
         target: auto
         informational: true
       - type: patch
-        target: 80%
-        informational: true
+        target: 95%
   individual_components:
     - component_id: platform-backend
       name: "Platform Backend"
@@ -54,8 +53,7 @@ component_management:
           target: auto
           informational: true
         - type: patch
-          target: 80%
-          informational: true
+          target: 95%
     - component_id: autogpt-libs
       name: "AutoGPT Libs"
       paths:
