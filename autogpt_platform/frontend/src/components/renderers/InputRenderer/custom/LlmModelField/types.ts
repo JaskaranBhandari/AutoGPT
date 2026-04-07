@@ -6,6 +6,8 @@ export type LlmModelMetadata = {
   provider_name: string;
   name: string;
   price_tier?: number;
+  is_recommended?: boolean;
+  is_enabled?: boolean;
 };
 
 export type LlmModelMetadataMap = Record<string, LlmModelMetadata>;
