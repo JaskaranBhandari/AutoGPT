@@ -9,6 +9,7 @@ shared tool registry as the SDK path.
 import asyncio
 import base64
 import logging
+import math
 import os
 import re
 import shutil
@@ -441,7 +442,9 @@ async def _baseline_llm_caller(
             if raw_resp and hasattr(raw_resp, "headers"):
                 cost_header = raw_resp.headers.get("x-total-cost")
                 if cost_header:
-                    state.cost_usd = (state.cost_usd or 0.0) + float(cost_header)
+                    cost = float(cost_header)
+                    if math.isfinite(cost):
+                        state.cost_usd = (state.cost_usd or 0.0) + max(0.0, cost)
         except (ValueError, AttributeError, UnboundLocalError):
             pass
 

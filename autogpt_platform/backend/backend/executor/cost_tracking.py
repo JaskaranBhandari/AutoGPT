@@ -34,8 +34,19 @@ _WALLTIME_BILLED_PROVIDERS = frozenset(
 # Hold strong references to in-flight log tasks so the event loop doesn't
 # garbage-collect them mid-execution. Tasks remove themselves on completion.
 _pending_log_tasks: set[asyncio.Task] = set()
-# Bound concurrent DB inserts to avoid unbounded queue growth under load.
-_log_semaphore = asyncio.Semaphore(50)
+# Per-loop semaphores: asyncio.Semaphore is not thread-safe and must not be
+# shared across event loops running in different threads. Key by loop instance
+# so each executor worker thread gets its own semaphore.
+_log_semaphores: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+
+
+def _get_log_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _log_semaphores.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(50)
+        _log_semaphores[loop] = sem
+    return sem
 
 
 async def drain_pending_cost_logs(timeout: float = 5.0) -> None:
@@ -81,7 +92,7 @@ def _schedule_log(
     db_client: "DatabaseManagerAsyncClient", entry: PlatformCostEntry
 ) -> None:
     async def _safe_log() -> None:
-        async with _log_semaphore:
+        async with _get_log_semaphore():
             try:
                 await db_client.log_platform_cost(entry)
             except Exception:
@@ -125,9 +136,9 @@ def resolve_tracking(
     2. Heuristic fallback: infer from `provider_cost`/token counts, then
        from provider name for per-character / per-second billing.
     """
-    # 1. Block explicitly declared its cost type
-    if stats.provider_cost_type:
-        return stats.provider_cost_type, stats.provider_cost or 0.0
+    # 1. Block explicitly declared its cost type (only when an amount is present)
+    if stats.provider_cost_type and stats.provider_cost is not None:
+        return stats.provider_cost_type, stats.provider_cost
 
     # 2. Provider returned actual USD cost (OpenRouter, Exa)
     if stats.provider_cost is not None:
@@ -217,9 +228,11 @@ async def log_system_credential_cost(
             # Only treat provider_cost as USD when the tracking type says so.
             # For other types (items, characters, per_run, ...) the
             # provider_cost field holds the raw amount, not a dollar value.
+            # Use tracking_amount (the normalized value from resolve_tracking)
+            # rather than raw stats.provider_cost to avoid unit mismatches.
             cost_microdollars = None
             if tracking_type == "cost_usd":
-                cost_microdollars = usd_to_microdollars(stats.provider_cost)
+                cost_microdollars = usd_to_microdollars(tracking_amount)
 
             meta: dict[str, Any] = {
                 "tracking_type": tracking_type,

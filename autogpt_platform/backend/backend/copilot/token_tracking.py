@@ -22,22 +22,35 @@ from .rate_limit import record_token_usage
 logger = logging.getLogger(__name__)
 
 # Hold strong references to in-flight cost log tasks to prevent GC.
-_pending_log_tasks: set["asyncio.Task[None]"] = set()
+_pending_log_tasks: set[asyncio.Task[None]] = set()
+# Per-loop semaphores: asyncio.Semaphore is not thread-safe and must not be
+# shared across event loops running in different threads.
+_log_semaphores: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+
+
+def _get_log_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _log_semaphores.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(50)
+        _log_semaphores[loop] = sem
+    return sem
 
 
 def _schedule_cost_log(entry: PlatformCostEntry) -> None:
     """Schedule a fire-and-forget cost log via DatabaseManagerAsyncClient RPC."""
 
     async def _safe_log() -> None:
-        try:
-            await platform_cost_db().log_platform_cost(entry)
-        except Exception:
-            logger.exception(
-                "Failed to log platform cost for user=%s provider=%s block=%s",
-                entry.user_id,
-                entry.provider,
-                entry.block_name,
-            )
+        async with _get_log_semaphore():
+            try:
+                await platform_cost_db().log_platform_cost(entry)
+            except Exception:
+                logger.exception(
+                    "Failed to log platform cost for user=%s provider=%s block=%s",
+                    entry.user_id,
+                    entry.provider,
+                    entry.block_name,
+                )
 
     task = asyncio.create_task(_safe_log())
     _pending_log_tasks.add(task)
