@@ -9,18 +9,40 @@ Both the baseline (OpenRouter) and SDK (Anthropic) service layers need to:
 This module extracts that common logic so both paths stay in sync.
 """
 
+import asyncio
 import logging
+import re
 
-from backend.data.platform_cost import (
-    PlatformCostEntry,
-    schedule_cost_log,
-    usd_to_microdollars,
-)
+from backend.data.db_accessors import platform_cost_db
+from backend.data.platform_cost import PlatformCostEntry, usd_to_microdollars
 
 from .model import ChatSession, Usage
 from .rate_limit import record_token_usage
 
 logger = logging.getLogger(__name__)
+
+# Hold strong references to in-flight cost log tasks to prevent GC.
+_pending_log_tasks: set["asyncio.Task[None]"] = set()
+
+
+def _schedule_cost_log(entry: PlatformCostEntry) -> None:
+    """Schedule a fire-and-forget cost log via DatabaseManagerAsyncClient RPC."""
+
+    async def _safe_log() -> None:
+        try:
+            await platform_cost_db().log_platform_cost(entry)
+        except Exception:
+            logger.exception(
+                "Failed to log platform cost for user=%s provider=%s block=%s",
+                entry.user_id,
+                entry.provider,
+                entry.block_name,
+            )
+
+    task = asyncio.create_task(_safe_log())
+    _pending_log_tasks.add(task)
+    task.add_done_callback(_pending_log_tasks.discard)
+
 
 # Identifiers used by PlatformCostLog for copilot turns (not tied to a real
 # block/credential in the block_cost_config or credentials_store tables).
@@ -29,8 +51,10 @@ COPILOT_CREDENTIAL_ID = "copilot_system"
 
 
 def _copilot_block_name(log_prefix: str) -> str:
-    """Turn a log prefix like ``"[SDK]"`` into a stable block_name
-    ``"copilot:SDK"``. Empty prefix becomes just ``"copilot"``."""
+    """Extract stable block_name from ``"[SDK][session][T1]"`` -> ``"copilot:SDK"``."""
+    match = re.search(r"\[([A-Za-z][A-Za-z0-9_]*)\]", log_prefix)
+    if match:
+        return f"{COPILOT_BLOCK_ID}:{match.group(1)}"
     tag = log_prefix.strip(" []")
     return f"{COPILOT_BLOCK_ID}:{tag}" if tag else COPILOT_BLOCK_ID
 
@@ -148,7 +172,7 @@ async def persist_and_record_usage(
             tracking_type = "tokens"
             tracking_amount = total_tokens
 
-        schedule_cost_log(
+        _schedule_cost_log(
             PlatformCostEntry(
                 user_id=user_id,
                 graph_exec_id=session_id,

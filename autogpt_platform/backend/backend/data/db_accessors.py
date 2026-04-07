@@ -142,3 +142,9 @@ def credit_db():
         credit_db = get_database_manager_async_client()
 
     return credit_db
+
+
+def platform_cost_db():
+    from backend.util.clients import get_database_manager_async_client
+
+    return get_database_manager_async_client()

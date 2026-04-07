@@ -58,12 +58,21 @@ async def drain_pending_cost_logs(timeout: float = 5.0) -> None:
                 len(still_pending),
                 timeout,
             )
-    # Also drain copilot cost log tasks (platform_cost._pending_log_tasks)
-    from backend.data.platform_cost import (  # noqa: PLC0415
-        drain_pending_cost_logs as _drain_copilot,
+    # Also drain copilot cost log tasks (token_tracking._pending_log_tasks)
+    from backend.copilot.token_tracking import (  # noqa: PLC0415
+        _pending_log_tasks as _copilot_tasks,
     )
 
-    await _drain_copilot()
+    copilot_pending = list(_copilot_tasks)
+    if copilot_pending:
+        logger.info("Draining %d copilot cost log task(s)", len(copilot_pending))
+        _, still_pending = await asyncio.wait(copilot_pending, timeout=timeout)
+        if still_pending:
+            logger.warning(
+                "%d copilot cost log task(s) did not complete within %.1fs",
+                len(still_pending),
+                timeout,
+            )
 
 
 def _schedule_log(

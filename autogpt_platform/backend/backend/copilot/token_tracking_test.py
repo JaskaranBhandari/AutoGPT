@@ -298,8 +298,10 @@ class TestPlatformCostLogging:
                 new_callable=AsyncMock,
             ),
             patch(
-                "backend.data.platform_cost.log_platform_cost_safe",
-                new=mock_log,
+                "backend.copilot.token_tracking.platform_cost_db",
+                return_value=type(
+                    "FakePlatformCostDb", (), {"log_platform_cost": mock_log}
+                )(),
             ),
         ):
             await persist_and_record_usage(
@@ -337,8 +339,10 @@ class TestPlatformCostLogging:
                 new_callable=AsyncMock,
             ),
             patch(
-                "backend.data.platform_cost.log_platform_cost_safe",
-                new=mock_log,
+                "backend.copilot.token_tracking.platform_cost_db",
+                return_value=type(
+                    "FakePlatformCostDb", (), {"log_platform_cost": mock_log}
+                )(),
             ),
         ):
             await persist_and_record_usage(
@@ -368,8 +372,10 @@ class TestPlatformCostLogging:
                 new_callable=AsyncMock,
             ),
             patch(
-                "backend.data.platform_cost.log_platform_cost_safe",
-                new=mock_log,
+                "backend.copilot.token_tracking.platform_cost_db",
+                return_value=type(
+                    "FakePlatformCostDb", (), {"log_platform_cost": mock_log}
+                )(),
             ),
         ):
             await persist_and_record_usage(
@@ -391,8 +397,10 @@ class TestPlatformCostLogging:
                 new_callable=AsyncMock,
             ),
             patch(
-                "backend.data.platform_cost.log_platform_cost_safe",
-                new=mock_log,
+                "backend.copilot.token_tracking.platform_cost_db",
+                return_value=type(
+                    "FakePlatformCostDb", (), {"log_platform_cost": mock_log}
+                )(),
             ),
         ):
             await persist_and_record_usage(
@@ -418,8 +426,10 @@ class TestPlatformCostLogging:
                 new_callable=AsyncMock,
             ),
             patch(
-                "backend.data.platform_cost.log_platform_cost_safe",
-                new=mock_log,
+                "backend.copilot.token_tracking.platform_cost_db",
+                return_value=type(
+                    "FakePlatformCostDb", (), {"log_platform_cost": mock_log}
+                )(),
             ),
         ):
             await persist_and_record_usage(
@@ -445,8 +455,10 @@ class TestPlatformCostLogging:
                 new_callable=AsyncMock,
             ),
             patch(
-                "backend.data.platform_cost.log_platform_cost_safe",
-                new=mock_log,
+                "backend.copilot.token_tracking.platform_cost_db",
+                return_value=type(
+                    "FakePlatformCostDb", (), {"log_platform_cost": mock_log}
+                )(),
             ),
         ):
             await persist_and_record_usage(
@@ -470,8 +482,10 @@ class TestPlatformCostLogging:
                 new_callable=AsyncMock,
             ),
             patch(
-                "backend.data.platform_cost.log_platform_cost_safe",
-                new=mock_log,
+                "backend.copilot.token_tracking.platform_cost_db",
+                return_value=type(
+                    "FakePlatformCostDb", (), {"log_platform_cost": mock_log}
+                )(),
             ),
         ):
             await persist_and_record_usage(
