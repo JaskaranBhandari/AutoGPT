@@ -15,6 +15,8 @@ import math
 import re
 import threading
 
+from prisma.errors import DataError
+
 from backend.data.db_accessors import platform_cost_db
 from backend.data.platform_cost import PlatformCostEntry, usd_to_microdollars
 
@@ -50,6 +52,18 @@ def _schedule_cost_log(entry: PlatformCostEntry) -> None:
         async with _get_log_semaphore():
             try:
                 await platform_cost_db().log_platform_cost(entry)
+            except DataError as e:
+                # Prisma DataError typically means the DB manager pod is running a
+                # stale Prisma client (e.g. during a rolling deploy after a schema
+                # migration). Log at WARNING so Sentry is not spammed.
+                logger.warning(
+                    "Skipping platform cost log (schema mismatch?) for "
+                    "user=%s provider=%s block=%s: %s",
+                    entry.user_id,
+                    entry.provider,
+                    entry.block_name,
+                    e,
+                )
             except Exception:
                 logger.exception(
                     "Failed to log platform cost for user=%s provider=%s block=%s",

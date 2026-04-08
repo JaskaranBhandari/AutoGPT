@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from prisma.errors import DataError
 from prisma.models import PlatformCostLog as PrismaLog
 from pydantic import BaseModel
 
@@ -87,6 +88,18 @@ async def log_platform_cost_safe(entry: PlatformCostEntry) -> None:
     try:
         async with _log_semaphore:
             await log_platform_cost(entry)
+    except DataError as e:
+        # Prisma DataError typically means the DB manager pod is running a stale
+        # Prisma client (e.g. during a rolling deploy after a schema migration).
+        # Log at WARNING so Sentry is not spammed.
+        logger.warning(
+            "Skipping platform cost log (schema mismatch?) for "
+            "user=%s provider=%s block=%s: %s",
+            entry.user_id,
+            entry.provider,
+            entry.block_name,
+            e,
+        )
     except Exception:
         logger.exception(
             "Failed to log platform cost for user=%s provider=%s block=%s",
