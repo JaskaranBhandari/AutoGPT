@@ -1477,5 +1477,5 @@ def test_generate_schema_raises_value_error_when_name_missing():
     and re-raised as ValueError so the existing 400 handler in rest_api.py fires
     instead of falling through to the 500 catch-all.
     """
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="name"):
         GraphModel._generate_schema((AgentInputBlock.Input, {}))

@@ -355,7 +355,7 @@ class BaseGraph(GraphBaseMeta):
                 "required": [p.name for p in schema_fields if p.value is None],
             }
         except AttributeError as e:
-            raise ValueError(str(e)) from e
+            raise ValueError(f"Invalid graph schema input: {e}") from e
 
 
 class GraphTriggerInfo(BaseModel):
