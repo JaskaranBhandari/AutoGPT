@@ -57,12 +57,9 @@ def _schedule_cost_log(entry: PlatformCostEntry) -> None:
                 # stale Prisma client (e.g. during a rolling deploy after a schema
                 # migration). Log at WARNING so Sentry is not spammed.
                 logger.warning(
-                    "Skipping platform cost log (schema mismatch?) for "
-                    "user=%s provider=%s block=%s: %s",
-                    entry.user_id,
-                    entry.provider,
-                    entry.block_name,
-                    e,
+                    f"Skipping platform cost log (schema mismatch?) for "
+                    f"user={entry.user_id} provider={entry.provider} "
+                    f"block={entry.block_name}: {e}"
                 )
             except Exception:
                 logger.exception(
