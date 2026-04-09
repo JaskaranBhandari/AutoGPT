@@ -233,8 +233,8 @@ async function handleUnlinkedServer(
     });
 
     const setupMessage = isDirect
-      ? `To use CoPilot, link ${contextLabel} to AutoGPT:\n\n${linkResult.link_url}\n\nThis link expires in 30 minutes.`
-      : `To set up CoPilot for ${contextLabel}, connect your AutoGPT account.\n\nOnce linked, everyone here can use CoPilot — usage appears in your AutoGPT account.\n\n${linkResult.link_url}\n\nThis link expires in 30 minutes.`;
+      ? `To use AutoPilot, link ${contextLabel} to AutoGPT:\n\n${linkResult.link_url}\n\nThis link expires in 30 minutes.`
+      : `To set up AutoPilot for ${contextLabel}, connect your AutoGPT account.\n\nOnce linked, everyone here can use AutoPilot — usage appears in your AutoGPT account.\n\n${linkResult.link_url}\n\nThis link expires in 30 minutes.`;
 
     if (isDirect) {
       // Already in a DM — post the link directly in this conversation
@@ -244,7 +244,7 @@ async function handleUnlinkedServer(
       const dmSent = await tryDM(bot, message, setupMessage);
       if (dmSent) {
         await thread.post(
-          `I've sent you a DM with a setup link! Once connected, everyone here can chat with CoPilot.`,
+          `I've sent you a DM with a setup link! Once connected, everyone here can chat with AutoPilot.`,
         );
       } else {
         await thread.post(setupMessage);
@@ -327,10 +327,10 @@ async function handleCoPilotMessage(
 
 function helpText(): string {
   return (
-    `**CoPilot Bot** — Your AutoGPT assistant\n\n` +
+    `**AutoPilot** — Your AutoGPT assistant\n\n` +
     `**Getting started:**\n` +
     `• The first person to mention me will receive a DM with a one-time setup link\n` +
-    `• Once set up, everyone in the server can chat with CoPilot\n` +
+    `• Once set up, everyone in the server can chat with AutoPilot\n` +
     `• Each person gets their own private conversation\n` +
     `• All conversations appear in the setup owner's AutoGPT account\n\n` +
     `**Commands:**\n` +
