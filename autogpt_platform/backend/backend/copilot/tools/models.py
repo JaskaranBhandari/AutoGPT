@@ -84,6 +84,10 @@ class ResponseType(str, Enum):
     FEATURE_REQUEST_SEARCH = "feature_request_search"
     FEATURE_REQUEST_CREATED = "feature_request_created"
 
+    # Graphiti memory
+    MEMORY_STORE = "memory_store"
+    MEMORY_SEARCH = "memory_search"
+
 
 # Base response model
 class ToolResponseBase(BaseModel):
@@ -466,7 +470,9 @@ class BlockOutputResponse(ToolResponseBase):
     block_name: str
     outputs: dict[str, list[Any]]
     success: bool = True
-    is_dry_run: bool = False
+    is_dry_run: bool | None = (
+        None  # only set to True on dry-run; omitted in normal runs
+    )
 
 
 class ReviewRequiredResponse(ToolResponseBase):
@@ -728,3 +734,21 @@ class TaskDecompositionResponse(ToolResponseBase):
     def sync_step_count(self) -> "TaskDecompositionResponse":
         self.step_count = len(self.steps)
         return self
+
+
+# --- Graphiti memory responses ---
+
+
+class MemoryStoreResponse(ToolResponseBase):
+    """Response when a memory is stored."""
+
+    type: ResponseType = ResponseType.MEMORY_STORE
+    memory_name: str
+
+
+class MemorySearchResponse(ToolResponseBase):
+    """Response when memories are searched."""
+
+    type: ResponseType = ResponseType.MEMORY_SEARCH
+    facts: list[str] = Field(default_factory=list)
+    recent_episodes: list[str] = Field(default_factory=list)
