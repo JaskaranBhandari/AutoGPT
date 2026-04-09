@@ -45,9 +45,11 @@ async function main() {
   // Start HTTP server for webhook requests
   await startServer(bot, PORT);
 
-  // Connect Discord Gateway if enabled
+  // Initialize all adapters — required for Telegram polling and Discord Gateway
+  await bot.initialize();
+
+  // Discord: connect Gateway WebSocket for receiving regular messages
   if (cfg.discord) {
-    await bot.initialize();
     // getAdapter() returns the initialized adapter instance with gateway methods;
     // bot.adapters gives the raw config objects which don't have startGatewayListener.
     const discord = (bot as any).getAdapter("discord");
@@ -59,6 +61,11 @@ async function main() {
       // Run in background, reconnect on disconnect
       void runGatewayLoop(discord, webhookUrl);
     }
+  }
+
+  // Telegram: polling starts automatically via bot.initialize() above (auto mode)
+  if (cfg.telegram) {
+    console.log("🔌 Telegram polling started (auto mode)");
   }
 
   console.log("\n✅ CoPilot Bot ready.\n");

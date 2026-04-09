@@ -1,17 +1,14 @@
 /**
- * Slack webhook endpoint.
- * Deploy as: POST /api/webhooks/slack
+ * Slack webhook handler.
+ * Vercel route: POST /api/webhooks/slack
+ *
+ * Configure in your Slack App settings under "Event Subscriptions":
+ *   Request URL: https://your-domain.com/api/webhooks/slack
  */
 
 import { getBotInstance } from "../_bot.js";
 
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<Response> {
   const bot = await getBotInstance();
-  const handler = bot.webhooks.slack;
-
-  if (!handler) {
-    return new Response("Slack adapter not configured", { status: 404 });
-  }
-
-  return handler(request);
+  return bot.webhooks.slack(request);
 }
