@@ -17,7 +17,6 @@ import {
 } from "../../components/ToolAccordion/AccordionContent";
 import { ToolAccordion } from "../../components/ToolAccordion/ToolAccordion";
 import { ToolErrorCard } from "../../components/ToolErrorCard/ToolErrorCard";
-import { useCopilotUIStore } from "../../store";
 import { StepItem } from "./components/StepItem";
 import {
   AccordionIcon,
@@ -48,7 +47,6 @@ interface Props {
 export function DecomposeGoalTool({ part, isLastMessage }: Props) {
   const text = getAnimationText(part);
   const { onSend } = useCopilotChatActions();
-  const { setInitialPrompt } = useCopilotUIStore();
 
   const isStreaming =
     part.state === "input-streaming" || part.state === "input-available";
@@ -104,7 +102,6 @@ export function DecomposeGoalTool({ part, isLastMessage }: Props) {
     setTimerActive(false);
     setIsEditing(true);
     setEditableSteps(output.steps.map((s) => ({ ...s })));
-    setInitialPrompt("I'd like to modify the plan. Here are my changes: ");
   }
 
   function handleStepChange(index: number, description: string) {
@@ -130,6 +127,13 @@ export function DecomposeGoalTool({ part, isLastMessage }: Props) {
       return next;
     });
   }
+
+  // If a new message arrives while editing, exit edit mode so the user is not stuck.
+  useEffect(() => {
+    if (!showActions && isEditing) {
+      setIsEditing(false);
+    }
+  }, [showActions, isEditing]);
 
   // Tick down only while the timer is active.
   useEffect(() => {
