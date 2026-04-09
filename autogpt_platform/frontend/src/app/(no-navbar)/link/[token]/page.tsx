@@ -4,12 +4,7 @@ import { Button } from "@/components/atoms/Button/Button";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { Text } from "@/components/atoms/Text/Text";
 import { useSupabase } from "@/lib/supabase/hooks/useSupabase";
-import {
-  CheckCircle,
-  LinkBreak,
-  Spinner,
-  Warning,
-} from "@phosphor-icons/react";
+import { CheckCircle, LinkBreak, Spinner } from "@phosphor-icons/react";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
@@ -34,7 +29,7 @@ type LinkState =
 export default function PlatformLinkPage() {
   const params = useParams();
   const token = params.token as string;
-  const { user, isUserLoading } = useSupabase();
+  const { user, isUserLoading, logOut } = useSupabase();
 
   const [state, setState] = useState<LinkState>({ status: "loading" });
 
@@ -46,8 +41,6 @@ export default function PlatformLinkPage() {
       return;
     }
 
-    // Fetch token metadata so we can show the server name on the confirm screen.
-    // Falls back gracefully if the endpoint is unavailable.
     void fetchTokenInfo(token).then(({ serverName, platform }) => {
       setState({ status: "ready", serverName, platform });
     });
@@ -103,6 +96,12 @@ export default function PlatformLinkPage() {
     }
   }
 
+  async function handleSwitchAccount() {
+    await logOut();
+    const loginUrl = `/login?next=${encodeURIComponent(`/link/${token}`)}`;
+    window.location.href = loginUrl;
+  }
+
   return (
     <div className="flex h-full min-h-[85vh] flex-col items-center justify-center py-10">
       {state.status === "loading" && <LoadingView />}
@@ -112,8 +111,10 @@ export default function PlatformLinkPage() {
       {state.status === "ready" && (
         <ReadyView
           onLink={handleLink}
+          onSwitchAccount={handleSwitchAccount}
           serverName={state.serverName}
           platform={state.platform}
+          userEmail={user?.email ?? null}
         />
       )}
       {state.status === "linking" && <LinkingView />}
@@ -188,12 +189,16 @@ function NotAuthenticatedView({ token }: { token: string }) {
 
 function ReadyView({
   onLink,
+  onSwitchAccount,
   serverName,
   platform,
+  userEmail,
 }: {
   onLink: () => void;
+  onSwitchAccount: () => void;
   serverName: string | null;
   platform: string | null;
+  userEmail: string | null;
 }) {
   const serverLabel =
     serverName ?? (platform ? `this ${platform} server` : "your server");
@@ -213,20 +218,15 @@ function ReadyView({
             What happens when you confirm:
           </Text>
           <ul className="mt-3 space-y-2 text-sm text-muted-foreground">
-            <li>✅ {serverLabel} will be connected to your AutoGPT account</li>
-            <li>✅ Everyone in the server can chat with CoPilot immediately</li>
-            <li>✅ Each person gets their own private conversation</li>
-            <li>✅ All conversations appear in your AutoGPT account</li>
+            <li>{serverLabel} will be connected to your AutoGPT account</li>
+            <li>Everyone in the server can chat with CoPilot immediately</li>
+            <li>Each person gets their own private conversation</li>
+            <li>All conversations appear in your AutoGPT account</li>
           </ul>
         </div>
 
-        <div className="flex w-full items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <Warning
-            size={18}
-            weight="fill"
-            className="mt-0.5 shrink-0 text-amber-600"
-          />
-          <Text variant="small" className="text-amber-800">
+        <div className="w-full rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <Text variant="small" className="text-muted-foreground">
             Usage from {serverLabel} will be billed to your AutoGPT account. You
             can unlink the server at any time from your account settings.
           </Text>
@@ -235,6 +235,20 @@ function ReadyView({
         <Button onClick={onLink} className="w-full">
           Connect {platformLabel} to AutoGPT
         </Button>
+
+        {userEmail && (
+          <div className="flex w-full items-center justify-between">
+            <Text variant="small" className="text-muted-foreground">
+              Signed in as {userEmail}
+            </Text>
+            <button
+              onClick={onSwitchAccount}
+              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              Not you? Sign out
+            </button>
+          </div>
+        )}
       </div>
     </AuthCard>
   );
