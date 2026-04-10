@@ -1262,6 +1262,11 @@ async def set_subscription_tier(user_id: str, tier: SubscriptionTier) -> None:
         data={"subscriptionTier": tier},
     )
     get_user_by_id.cache_delete(user_id)
+    # Also invalidate the rate-limit tier cache so CoPilot picks up the new
+    # tier immediately rather than waiting up to 5 minutes for the TTL to expire.
+    from backend.copilot.rate_limit import get_user_tier  # local import avoids circular
+
+    get_user_tier.cache_delete(user_id)  # type: ignore[attr-defined]
 
 
 async def cancel_stripe_subscription(user_id: str) -> None:
