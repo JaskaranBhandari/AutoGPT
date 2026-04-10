@@ -159,6 +159,13 @@ class BaseAppService(AppProcess, ABC):
 class RemoteCallError(BaseModel):
     type: str = "RemoteCallError"
     args: Optional[Tuple[Any, ...]] = None
+    # Optional extras for exception types that carry structured attributes
+    # beyond ``exc.args``. When set, the client-side handler uses these to
+    # reconstruct the exception with the original attributes.
+    # Currently used by ``GraphValidationError.node_errors`` so the
+    # copilot's credential-race fallback can distinguish credential
+    # failures from other graph validation errors over RPC.
+    extras: Optional[dict[str, Any]] = None
 
 
 class UnhealthyServiceError(ValueError):
@@ -238,11 +245,21 @@ class AppService(BaseAppService, ABC):
                         f"{request.method} {request.url.path} failed: {exc}",
                         exc_info=exc,
                     )
+            extras: Optional[dict[str, Any]] = None
+            if isinstance(exc, exceptions.GraphValidationError):
+                # ``exc.args`` only preserves the top-level message; the
+                # structured ``node_errors`` mapping needs to ride along
+                # in ``extras`` so the client can rebuild the original
+                # exception state (used by the copilot credential-race
+                # fallback to distinguish credential failures from other
+                # validation errors).
+                extras = {"node_errors": dict(exc.node_errors)}
             return responses.JSONResponse(
                 status_code=status_code,
                 content=RemoteCallError(
                     type=str(exc.__class__.__name__),
                     args=exc.args or (str(exc),),
+                    extras=extras,
                 ).model_dump(),
             )
 
@@ -613,6 +630,19 @@ def get_service_client(
                     if issubclass(exception_class, DataError):
                         msg = str(args[0]) if args else str(e)
                         raise exception_class({"user_facing_error": {"message": msg}})
+
+                    # GraphValidationError carries a structured ``node_errors``
+                    # attribute that ``exc.args`` alone doesn't preserve.
+                    # If the server included it in ``extras``, thread it
+                    # back into the reconstructed exception.
+                    if issubclass(exception_class, exceptions.GraphValidationError):
+                        msg = str(args[0]) if args else str(e)
+                        node_errors = (
+                            error_response.extras.get("node_errors")
+                            if error_response.extras
+                            else None
+                        )
+                        raise exception_class(msg, node_errors=node_errors)
 
                     raise exception_class(*args)
 

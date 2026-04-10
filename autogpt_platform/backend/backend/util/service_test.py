@@ -12,6 +12,7 @@ from prisma.errors import DataError, UniqueViolationError
 from pydantic import TypeAdapter
 
 from backend.data.model import User
+from backend.util.exceptions import GraphValidationError
 from backend.util.service import (
     AppService,
     AppServiceClient,
@@ -488,6 +489,66 @@ class TestHTTPErrorRetryBehavior:
             # And should have the expected data structure (not crash)
             assert hasattr(exc_info.value, "data")
             assert isinstance(exc_info.value.data, dict)
+
+    def test_graph_validation_error_preserves_node_errors(self):
+        """GraphValidationError carries a structured ``node_errors`` mapping
+        in addition to its top-level message.  The server-side error handler
+        packs it into ``RemoteCallError.extras`` and the client-side handler
+        rebuilds the exception with ``node_errors`` preserved — without this
+        round-trip the copilot's credential-race fallback can't distinguish
+        credential failures from other validation errors, and users get a
+        generic error instead of the inline credentials setup card.
+        """
+        node_errors = {
+            "some-node-id": {
+                "credentials": "These credentials are required",
+                "api_key": "Invalid credentials: not found",
+            }
+        }
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.json.return_value = {
+            "type": "GraphValidationError",
+            "args": ["Graph validation failed: 2 issues on 1 nodes"],
+            "extras": {"node_errors": node_errors},
+        }
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "400 Bad Request", request=Mock(), response=mock_response
+        )
+
+        client = get_service_client(ServiceTestClient)
+
+        with pytest.raises(GraphValidationError) as exc_info:
+            client._handle_call_method_response(  # type: ignore[attr-defined]
+                response=mock_response, method_name="test_method"
+            )
+
+        assert "Graph validation failed" in str(exc_info.value)
+        assert exc_info.value.node_errors == node_errors
+
+    def test_graph_validation_error_without_extras_still_deserializes(self):
+        """Backwards-compat: old server responses without ``extras`` should
+        still reconstruct a ``GraphValidationError`` — just with an empty
+        ``node_errors`` mapping (matches current pre-fix behaviour)."""
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.json.return_value = {
+            "type": "GraphValidationError",
+            "args": ["Graph validation failed: 1 issues on 1 nodes"],
+        }
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "400 Bad Request", request=Mock(), response=mock_response
+        )
+
+        client = get_service_client(ServiceTestClient)
+
+        with pytest.raises(GraphValidationError) as exc_info:
+            client._handle_call_method_response(  # type: ignore[attr-defined]
+                response=mock_response, method_name="test_method"
+            )
+
+        assert "Graph validation failed" in str(exc_info.value)
+        assert exc_info.value.node_errors == {}
 
     def test_client_error_status_codes_coverage(self):
         """Test that various 4xx status codes are all wrapped as HTTPClientError."""
