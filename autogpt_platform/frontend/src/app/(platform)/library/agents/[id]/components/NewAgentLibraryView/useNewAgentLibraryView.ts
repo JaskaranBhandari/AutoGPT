@@ -1,4 +1,7 @@
-import { useGetV2GetLibraryAgent } from "@/app/api/__generated__/endpoints/library/library";
+import {
+  useGetV2GetLibraryAgent,
+  useGetV2ListTriggerAgents,
+} from "@/app/api/__generated__/endpoints/library/library";
 import { useGetV2GetASpecificPreset } from "@/app/api/__generated__/endpoints/presets/presets";
 import { useGetV1ListExecutionSchedulesForAGraph } from "@/app/api/__generated__/endpoints/schedules/schedules";
 import { GraphExecutionJobInfo } from "@/app/api/__generated__/models/graphExecutionJobInfo";
@@ -32,6 +35,10 @@ export function useNewAgentLibraryView() {
     isSuccess,
     error,
   } = useGetV2GetLibraryAgent(agentId, { query: { select: okData } });
+
+  const { data: triggerAgents } = useGetV2ListTriggerAgents(agentId, {
+    query: { enabled: !!agentId, select: okData },
+  });
 
   const [{ activeItem, activeTab: activeTabRaw }, setQueryStates] =
     useQueryStates({
@@ -223,6 +230,14 @@ export function useNewAgentLibraryView() {
     onItemCreated({ item: newSchedule, type: "scheduled" });
   }
 
+  const isActiveItemTriggerAgent = useMemo(
+    () =>
+      activeTab === "triggers" &&
+      !!activeItem &&
+      !!triggerAgents?.some((t) => t.id === activeItem),
+    [activeTab, activeItem, triggerAgents],
+  );
+
   return {
     agentId: id,
     agent,
@@ -233,6 +248,7 @@ export function useNewAgentLibraryView() {
     hasAnyItems,
     showSidebarLayout,
     activeItem,
+    isActiveItemTriggerAgent,
     sidebarLoading,
     activeTab,
     setActiveTab: handleSetActiveTab,

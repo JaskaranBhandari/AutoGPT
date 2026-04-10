@@ -9,6 +9,7 @@ import {
   unpaginate,
 } from "@/app/api/helpers";
 import { useGetV1ListGraphExecutionsInfinite } from "@/app/api/__generated__/endpoints/graphs/graphs";
+import { useGetV2ListTriggerAgents } from "@/app/api/__generated__/endpoints/library/library";
 import { useGetV2ListPresets } from "@/app/api/__generated__/endpoints/presets/presets";
 import { useGetV1ListExecutionSchedulesForAGraph } from "@/app/api/__generated__/endpoints/schedules/schedules";
 import { useExecutionEvents } from "@/hooks/useExecutionEvents";
@@ -31,6 +32,7 @@ function parseTab(
 
 type Args = {
   graphId: string;
+  libraryAgentID: string;
   onSelectRun: (
     runId: string,
     tab?: "runs" | "scheduled" | "templates" | "triggers",
@@ -46,6 +48,7 @@ type Args = {
 
 export function useSidebarRunsList({
   graphId,
+  libraryAgentID,
   onSelectRun,
   onCountsChange,
 }: Args) {
@@ -86,6 +89,13 @@ export function useSidebarRunsList({
     },
   );
 
+  const triggerAgentsQuery = useGetV2ListTriggerAgents(libraryAgentID, {
+    query: {
+      enabled: !!libraryAgentID,
+      select: okData,
+    },
+  });
+
   const runs = useMemo(
     () => (runsQuery.data ? unpaginate(runsQuery.data, "executions") : []),
     [runsQuery.data],
@@ -101,17 +111,24 @@ export function useSidebarRunsList({
     () => allPresets.filter((preset) => !preset.webhook_id),
     [allPresets],
   );
+  const triggerAgents = triggerAgentsQuery.data || [];
 
   const runsCount = getPaginatedTotalCount(runsQuery.data, runs.length);
   const schedulesCount = schedules.length;
   const templatesCount = templates.length;
-  const triggersCount = triggers.length;
+  // Combined count: webhook triggers + trigger agents (both shown
+  // under the "Triggers" tab as separate sections).
+  const triggersCount = triggers.length + triggerAgents.length;
   const loading =
     !runsQuery.isSuccess ||
     !schedulesQuery.isSuccess ||
-    !presetsQuery.isSuccess;
+    !presetsQuery.isSuccess ||
+    !triggerAgentsQuery.isSuccess;
   const stale =
-    runsQuery.isStale || schedulesQuery.isStale || presetsQuery.isStale;
+    runsQuery.isStale ||
+    schedulesQuery.isStale ||
+    presetsQuery.isStale ||
+    triggerAgentsQuery.isStale;
 
   // Update query cache when execution events arrive via websocket
   useExecutionEvents({
@@ -167,17 +184,25 @@ export function useSidebarRunsList({
   }, [templates, activeItem, tabValue, onSelectRun]);
 
   useEffect(() => {
-    if (triggers.length > 0 && tabValue === "triggers" && !activeItem) {
+    if (tabValue !== "triggers" || activeItem) return;
+    if (triggers.length > 0) {
       onSelectRun(triggers[0].id, "triggers");
+    } else if (triggerAgents.length > 0) {
+      onSelectRun(triggerAgents[0].id, "triggers");
     }
-  }, [triggers, activeItem, tabValue, onSelectRun]);
+  }, [triggers, triggerAgents, activeItem, tabValue, onSelectRun]);
 
   return {
     runs,
     schedules,
     templates,
     triggers,
-    error: schedulesQuery.error || runsQuery.error || presetsQuery.error,
+    triggerAgents,
+    error:
+      schedulesQuery.error ||
+      runsQuery.error ||
+      presetsQuery.error ||
+      triggerAgentsQuery.error,
     loading,
     runsQuery,
     tabValue,
