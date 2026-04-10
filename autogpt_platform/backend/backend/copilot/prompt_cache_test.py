@@ -214,16 +214,99 @@ class TestInjectUserContext:
         assert result is None
         mock_db.update_message_content_by_sequence.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_returns_prefix_even_when_db_persist_fails(self):
+        """DB persist failure still returns the prefixed message (silent-success contract)."""
+        from backend.copilot.model import ChatMessage
+        from backend.copilot.service import inject_user_context
+
+        understanding = MagicMock()
+
+        msg = ChatMessage(role="user", content="hello", sequence=0)
+
+        mock_db = MagicMock()
+        mock_db.update_message_content_by_sequence = AsyncMock(return_value=False)
+        with patch(
+            "backend.copilot.service.chat_db",
+            return_value=mock_db,
+        ), patch(
+            "backend.copilot.service.format_understanding_for_prompt",
+            return_value="biz ctx",
+        ):
+            result = await inject_user_context(understanding, "hello", "sess-1", [msg])
+
+        assert result is not None
+        assert "<user_context>" in result
+        assert result.endswith("hello")
+        # in-memory list is still mutated even when persist returns False
+        assert msg.content == result
+
+    @pytest.mark.asyncio
+    async def test_empty_message_produces_well_formed_prefix(self):
+        """An empty message is wrapped in a well-formed <user_context> block."""
+        from backend.copilot.model import ChatMessage
+        from backend.copilot.service import inject_user_context
+
+        understanding = MagicMock()
+        msg = ChatMessage(role="user", content="", sequence=0)
+
+        mock_db = MagicMock()
+        mock_db.update_message_content_by_sequence = AsyncMock(return_value=True)
+        with patch(
+            "backend.copilot.service.chat_db",
+            return_value=mock_db,
+        ), patch(
+            "backend.copilot.service.format_understanding_for_prompt",
+            return_value="biz ctx",
+        ):
+            result = await inject_user_context(understanding, "", "sess-1", [msg])
+
+        assert result == "<user_context>\nbiz ctx\n</user_context>\n\n"
+        mock_db.update_message_content_by_sequence.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_double_injection_guard_skips_rewrite(self):
+        """If the message already contains <user_context>, no re-injection occurs."""
+        from backend.copilot.model import ChatMessage
+        from backend.copilot.service import inject_user_context
+
+        understanding = MagicMock()
+        already_prefixed = (
+            "<user_context>\nold ctx\n</user_context>\n\nhello again"
+        )
+        msg = ChatMessage(role="user", content=already_prefixed, sequence=0)
+
+        mock_db = MagicMock()
+        mock_db.update_message_content_by_sequence = AsyncMock(return_value=True)
+        with patch(
+            "backend.copilot.service.chat_db",
+            return_value=mock_db,
+        ), patch(
+            "backend.copilot.service.format_understanding_for_prompt",
+            return_value="new ctx",
+        ):
+            result = await inject_user_context(
+                understanding, already_prefixed, "sess-1", [msg]
+            )
+
+        # Returns the incoming message unchanged, no DB write issued.
+        assert result == already_prefixed
+        assert "new ctx" not in result
+        mock_db.update_message_content_by_sequence.assert_not_awaited()
+
 
 class TestCacheableSystemPromptContent:
     """Smoke-test the _CACHEABLE_SYSTEM_PROMPT constant for key structural requirements."""
 
     def test_cacheable_prompt_has_no_placeholder(self):
-        """The static cacheable prompt must not contain format placeholders."""
+        """The static cacheable prompt must not contain the users_information placeholder.
+
+        Checks for the specific placeholder only — unrelated curly braces
+        (e.g. JSON examples in future prompt text) should not fail this test.
+        """
         from backend.copilot.service import _CACHEABLE_SYSTEM_PROMPT
 
         assert "{users_information}" not in _CACHEABLE_SYSTEM_PROMPT
-        assert "{" not in _CACHEABLE_SYSTEM_PROMPT
 
     def test_cacheable_prompt_mentions_user_context(self):
         """The prompt instructs the model to parse <user_context> blocks."""

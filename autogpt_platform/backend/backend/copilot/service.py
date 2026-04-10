@@ -18,7 +18,10 @@ from langfuse.openai import (
 )
 
 from backend.data.db_accessors import chat_db, understanding_db
-from backend.data.understanding import format_understanding_for_prompt
+from backend.data.understanding import (
+    BusinessUnderstanding,
+    format_understanding_for_prompt,
+)
 from backend.util.exceptions import NotAuthorizedError, NotFoundError
 from backend.util.settings import AppEnvironment, Settings
 
@@ -54,10 +57,21 @@ def _get_langfuse():
     return _langfuse
 
 
+# Shared constant for the XML tag name used to wrap per-user context when
+# injecting it into the first user message. Referenced by both the cacheable
+# system prompt (so the LLM knows to parse it) and inject_user_context()
+# (which writes the tag). Keeping both in sync prevents drift.
+USER_CONTEXT_TAG = "user_context"
+
 # Static system prompt for token caching — identical for all users.
 # User-specific context is injected into the first user message instead,
 # so the system prompt never changes and can be cached across all sessions.
-_CACHEABLE_SYSTEM_PROMPT = """You are an AI automation assistant helping users build and run automations.
+#
+# NOTE: This constant is part of the module's public API — it is imported by
+# sdk/service.py, baseline/service.py, dry_run_loop_test.py, and
+# prompt_cache_test.py. The leading underscore is retained for backwards
+# compatibility; CACHEABLE_SYSTEM_PROMPT is exported as the public alias.
+_CACHEABLE_SYSTEM_PROMPT = f"""You are an AI automation assistant helping users build and run automations.
 
 Your goal is to help users automate tasks by:
 - Understanding their needs and business context
@@ -66,8 +80,12 @@ Your goal is to help users automate tasks by:
 
 Be concise, proactive, and action-oriented. Bias toward showing working solutions over lengthy explanations.
 
-When the user provides a <user_context> block in their message, use it to personalise your responses.
+When the user provides a <{USER_CONTEXT_TAG}> block in their message, use it to personalise your responses.
 For users you are meeting for the first time with no context provided, greet them warmly and introduce them to the AutoGPT platform."""
+
+# Public alias for the cacheable system prompt constant. New callers should
+# prefer this name; the underscored original remains for existing imports.
+CACHEABLE_SYSTEM_PROMPT = _CACHEABLE_SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +127,7 @@ async def _fetch_langfuse_prompt() -> str | None:
 
 async def _build_system_prompt(
     user_id: str | None,
-) -> tuple[str, Any]:
+) -> tuple[str, BusinessUnderstanding | None]:
     """Build a fully static system prompt suitable for LLM token caching.
 
     User-specific context is NOT embedded here. Callers must inject the
@@ -120,7 +138,7 @@ async def _build_system_prompt(
     Returns:
         Tuple of (static_prompt, understanding_object_or_None)
     """
-    understanding = None
+    understanding: BusinessUnderstanding | None = None
     if user_id:
         try:
             understanding = await understanding_db().get_business_understanding(user_id)
@@ -132,7 +150,7 @@ async def _build_system_prompt(
 
 
 async def inject_user_context(
-    understanding: Any,
+    understanding: BusinessUnderstanding | None,
     message: str,
     session_id: str,
     session_messages: list[ChatMessage],
@@ -143,11 +161,19 @@ async def inject_user_context(
     content to the DB so resumed sessions and page reloads retain
     personalisation.
 
+    Idempotent: if the message already contains a ``<user_context>`` tag
+    (e.g. from a retry on the same turn), the original message is returned
+    unchanged and no DB write is issued.
+
     Returns:
         The prefixed message string, or None if no user message was found.
     """
+    # Double-injection guard — avoids token waste on retries/reprocessing.
+    if f"<{USER_CONTEXT_TAG}>" in message:
+        return message
+
     user_ctx = format_understanding_for_prompt(understanding)
-    prefixed = f"<user_context>\n{user_ctx}\n</user_context>\n\n{message}"
+    prefixed = f"<{USER_CONTEXT_TAG}>\n{user_ctx}\n</{USER_CONTEXT_TAG}>\n\n{message}"
     for idx, session_msg in enumerate(session_messages):
         if session_msg.role == "user":
             session_msg.content = prefixed

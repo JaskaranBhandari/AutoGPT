@@ -526,6 +526,15 @@ async def update_message_content_by_sequence(
                 f"No message found to update for session {session_id}, sequence {sequence}"
             )
             return False
+        if result > 1:
+            # Defence-in-depth: (sessionId, sequence) is expected to identify
+            # at most one message. If we ever hit this branch it indicates a
+            # data integrity issue (non-unique sequence numbers within a
+            # session) that silently corrupted multiple rows.
+            logger.error(
+                f"update_message_content_by_sequence touched {result} rows "
+                f"for session {session_id}, sequence {sequence} — expected 1"
+            )
         return True
     except Exception as e:
         logger.error(
