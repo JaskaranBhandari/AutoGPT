@@ -100,6 +100,16 @@ router = APIRouter(
     tags=["chat"],
 )
 
+
+_USER_CONTEXT_RE = re.compile(r"^<user_context>.*?</user_context>\n\n", re.DOTALL)
+
+
+def _strip_injected_context(message: dict) -> dict:
+    if message.get("role") == "user" and isinstance(message.get("content"), str):
+        message["content"] = _USER_CONTEXT_RE.sub("", message["content"])
+    return message
+
+
 # ========== Request/Response Models ==========
 
 
@@ -421,7 +431,9 @@ async def get_session(
     )
     if page is None:
         raise NotFoundError(f"Session {session_id} not found.")
-    messages = [message.model_dump() for message in page.messages]
+    messages = [
+        _strip_injected_context(message.model_dump()) for message in page.messages
+    ]
 
     # Only check active stream on initial load (not on "load more" requests)
     active_stream_info = None
