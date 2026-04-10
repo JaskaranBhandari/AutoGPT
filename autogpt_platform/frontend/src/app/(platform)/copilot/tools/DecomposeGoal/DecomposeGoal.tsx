@@ -119,6 +119,20 @@ export function DecomposeGoalTool({
   const [isEditing, setIsEditing] = useState(false);
   const [editableSteps, setEditableSteps] = useState<EditableStep[]>([]);
 
+  // True iff the lazy initializer above already returned 0 because the
+  // server-stamped deadline had elapsed before the user reopened the tab.
+  // The auto-approve effect uses this to avoid silently approving on mount
+  // — the server's own fallback timer will handle it within ~30s, and
+  // skipping the silent fire gives the user a chance to click Modify
+  // instead. Without this guard, reopening between 60-90s after creation
+  // would auto-approve with no interaction.
+  const wasInitiallyPastDeadlineRef = useRef(
+    secondsLeft === 0 &&
+      !!output &&
+      isDecompositionOutput(output) &&
+      !!output.created_at,
+  );
+
   const approvedRef = useRef(false);
   const onSendRef = useRef(onSend);
   const isEditingRef = useRef(isEditing);
@@ -196,12 +210,21 @@ export function DecomposeGoalTool({
   }, [showActions, timerActive, part.toolCallId]);
 
   // Auto-approve when countdown reaches 0 — but only after the assistant
-  // has finished streaming its summary text. Firing during streaming would
-  // hit the same locked-session failure as a manual click. If the timer
-  // hits 0 mid-stream, this effect re-runs when actionsEnabled flips true.
-  // approve() is stable via approvedRef — safe to omit from deps.
+  // has finished streaming its summary text, AND only if the timer
+  // actually counted down (not if it started at 0 because the deadline
+  // had already passed when the user reopened the tab). Firing on mount
+  // in the past-deadline case would silently approve without giving the
+  // user a chance to click Modify; the server's fallback timer covers
+  // that scenario instead. If the timer hits 0 mid-stream, this effect
+  // re-runs when actionsEnabled flips true. approve() is stable via
+  // approvedRef — safe to omit from deps.
   useEffect(() => {
-    if (secondsLeft === 0 && timerActive && actionsEnabled) {
+    if (
+      secondsLeft === 0 &&
+      timerActive &&
+      actionsEnabled &&
+      !wasInitiallyPastDeadlineRef.current
+    ) {
       approve();
     }
   }, [secondsLeft, timerActive, actionsEnabled]); // approve reads refs only — safe to omit
