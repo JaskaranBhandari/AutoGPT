@@ -420,12 +420,18 @@ class BlockWebhookConfig(BlockManualWebhookConfig):
 class Block(ABC, Generic[BlockSchemaInputType, BlockSchemaOutputType]):
     _optimized_description: ClassVar[str | None] = None
 
-    # Set to True for blocks (e.g. OrchestratorBlock in agent mode) that
-    # may make multiple LLM calls in a single run. The executor will then
-    # charge `block_cost * (llm_call_count - 1)` extra credits after the
-    # block completes — the first call is already covered by the upfront
-    # `_charge_usage()` call. Defaults to False (single charge per run).
-    charge_per_llm_call: ClassVar[bool] = False
+    def extra_credit_charges(self, execution_stats: "NodeExecutionStats") -> int:
+        """Return extra credits to charge after this block run completes.
+
+        Called by the executor after a block finishes with COMPLETED status.
+        The return value is the number of additional base-cost credits to
+        charge beyond the single credit already collected by ``_charge_usage``
+        at the start of execution. Defaults to 0 (no extra charges).
+
+        Override in blocks (e.g. OrchestratorBlock) that make multiple LLM
+        calls within one run and should be billed per call.
+        """
+        return 0
 
     def __init__(
         self,

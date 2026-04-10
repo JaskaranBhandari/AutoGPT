@@ -35,10 +35,7 @@ from backend.data.dynamic_fields import (
 from backend.data.execution import ExecutionContext
 from backend.data.model import NodeExecutionStats, SchemaField
 from backend.util import json
-from backend.util.clients import (
-    get_database_manager_async_client,
-    get_database_manager_client,
-)
+from backend.util.clients import get_database_manager_async_client
 from backend.util.exceptions import InsufficientBalanceError
 from backend.util.prompt import MAIN_OBJECTIVE_PREFIX
 from backend.util.security import SENSITIVE_FIELD_NAMES
@@ -373,10 +370,14 @@ class OrchestratorBlock(Block):
     single-shot and iterative agent mode execution.
     """
 
-    # In agent mode the block makes one LLM call per iteration. The executor
-    # uses this flag to charge `cost * (llm_call_count - 1)` extra credits
-    # after the block completes; the first call is covered by _charge_usage().
-    charge_per_llm_call = True
+    def extra_credit_charges(self, execution_stats: NodeExecutionStats) -> int:
+        """Charge one extra base credit per LLM call beyond the first.
+
+        In agent mode each iteration makes one LLM call. The first is already
+        covered by _charge_usage(); this returns the number of additional
+        credits so the executor can bill the remaining calls post-completion.
+        """
+        return max(0, execution_stats.llm_call_count - 1)
 
     # MCP server name used by the Claude Code SDK execution mode.  Keep in sync
     # with _create_graph_mcp_server and the MCP_PREFIX derivation in _execute_tools_sdk_mode.
@@ -1142,22 +1143,11 @@ class OrchestratorBlock(Block):
                 and tool_node_stats is not None
                 and tool_node_stats.error is None
             ):
-                tool_cost, remaining_balance = await asyncio.to_thread(
-                    execution_processor.charge_node_usage,
+                tool_cost, _ = await execution_processor.charge_node_usage(
                     node_exec_entry,
                 )
                 if tool_cost > 0:
                     self.merge_stats(NodeExecutionStats(extra_cost=tool_cost))
-                    # Notify the user if their balance is now low — mirrors
-                    # the main queue path so nested tool charges don't
-                    # bypass low-balance alerts.
-                    await asyncio.to_thread(
-                        execution_processor._handle_low_balance,
-                        db_client=get_database_manager_client(),
-                        user_id=execution_params.user_id,
-                        current_balance=remaining_balance,
-                        transaction_cost=tool_cost,
-                    )
 
             # Get outputs from database after execution completes using database manager client
             node_outputs = await db_client.get_execution_outputs_by_node_exec_id(

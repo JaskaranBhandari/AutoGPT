@@ -687,38 +687,25 @@ class ExecutionProcessor:
         # InsufficientBalanceError here is a post-hoc billing leak — the
         # work is already done but the user can no longer pay. We:
         #   1. log at ERROR with structured fields so alerting can catch it
-        #   2. record the error on execution_stats.error for downstream
-        #      monitoring (stats are persisted into node_stats below)
-        #   3. fire _handle_insufficient_funds_notif so the user is
+        #   2. fire _handle_insufficient_funds_notif so the user is
         #      notified (mirrors the main queue path at ~line 1254)
         # The run itself is kept COMPLETED (the block's outputs are
         # already committed) — matching the documented "billing leak"
         # contract rather than retroactively failing a successful run.
-        if (
-            status == ExecutionStatus.COMPLETED
-            and node.block.charge_per_llm_call
-            and execution_stats.llm_call_count > 1
+        extra_iterations = (
+            node.block.extra_credit_charges(execution_stats)
+            if status == ExecutionStatus.COMPLETED
             and not node_exec.execution_context.dry_run
-        ):
-            extra_iterations = execution_stats.llm_call_count - 1
+            else 0
+        )
+        if extra_iterations > 0:
             try:
-                extra_cost, remaining_balance = await asyncio.to_thread(
-                    self.charge_extra_iterations,
+                extra_cost, remaining_balance = await self.charge_extra_iterations(
                     node_exec,
                     extra_iterations,
                 )
                 if extra_cost > 0:
                     execution_stats.extra_cost += extra_cost
-                    # Wrap in to_thread — _handle_low_balance does sync DB
-                    # work and we're in an async method, so calling it
-                    # directly would block the event loop.
-                    await asyncio.to_thread(
-                        self._handle_low_balance,
-                        db_client=get_db_client(),
-                        user_id=node_exec.user_id,
-                        current_balance=remaining_balance,
-                        transaction_cost=extra_cost,
-                    )
             except InsufficientBalanceError as e:
                 log_metadata.error(
                     "billing_leak: insufficient balance after "
@@ -1137,46 +1124,16 @@ class ExecutionProcessor:
     # 200 leaves headroom while preventing runaway charges.
     _MAX_EXTRA_ITERATIONS = 200
 
-    def charge_node_usage(
+    def _charge_extra_iterations_sync(
         self,
         node_exec: NodeExecutionEntry,
+        capped_iterations: int,
     ) -> tuple[int, int]:
-        """Charge a single node execution to the user.
+        """Synchronous implementation — runs in a thread-pool worker.
 
-        Public wrapper around :meth:`_charge_usage` for blocks (e.g. the
-        OrchestratorBlock) that spawn nested node executions outside the
-        main queue and therefore need to charge them explicitly.
-
-        Note: this **does not** increment the global execution counter
-        (``increment_execution_count``). Nested tool executions are
-        sub-steps of a single block run from the user's perspective and
-        should not push them into higher per-execution cost tiers.
+        Called only from :meth:`charge_extra_iterations`. Do not call
+        directly from async code.
         """
-        return self._charge_usage(
-            node_exec=node_exec,
-            execution_count=0,
-        )
-
-    def charge_extra_iterations(
-        self,
-        node_exec: NodeExecutionEntry,
-        extra_iterations: int,
-    ) -> tuple[int, int]:
-        """Charge a block extra iterations beyond the initial run.
-
-        Used by agent-mode blocks (e.g. OrchestratorBlock) that make
-        multiple LLM calls within a single node execution. The first
-        iteration is already charged by :meth:`_charge_usage`; this
-        method charges *extra_iterations* additional copies of the
-        block's base cost.
-
-        Returns ``(total_extra_cost, remaining_balance)``. May raise
-        ``InsufficientBalanceError`` if the user can't afford the charge.
-        """
-        if extra_iterations <= 0:
-            return 0, 0
-        # Cap to protect against a corrupted llm_call_count.
-        capped_iterations = min(extra_iterations, self._MAX_EXTRA_ITERATIONS)
         db_client = get_db_client()
         block, cost, matching_filter = self._resolve_block_cost(node_exec)
         if not block or cost <= 0:
@@ -1203,6 +1160,62 @@ class ExecutionProcessor:
             ),
         )
         return total_extra_cost, remaining_balance
+
+    async def charge_extra_iterations(
+        self,
+        node_exec: NodeExecutionEntry,
+        extra_iterations: int,
+    ) -> tuple[int, int]:
+        """Charge a block extra iterations beyond the initial run.
+
+        Used by agent-mode blocks (e.g. OrchestratorBlock) that make
+        multiple LLM calls within a single node execution. The first
+        iteration is already charged by :meth:`_charge_usage`; this
+        method charges *extra_iterations* additional copies of the
+        block's base cost.
+
+        Returns ``(total_extra_cost, remaining_balance)``. May raise
+        ``InsufficientBalanceError`` if the user can't afford the charge.
+        """
+        if extra_iterations <= 0:
+            return 0, 0
+        # Cap to protect against a corrupted llm_call_count.
+        capped = min(extra_iterations, self._MAX_EXTRA_ITERATIONS)
+        return await asyncio.get_event_loop().run_in_executor(
+            None, self._charge_extra_iterations_sync, node_exec, capped
+        )
+
+    async def charge_node_usage(
+        self,
+        node_exec: NodeExecutionEntry,
+    ) -> tuple[int, int]:
+        """Charge a single node execution to the user.
+
+        Public async wrapper around :meth:`_charge_usage` for blocks (e.g. the
+        OrchestratorBlock) that spawn nested node executions outside the
+        main queue and therefore need to charge them explicitly.
+
+        Also handles low-balance notification so callers don't need to touch
+        private methods directly.
+
+        Note: this **does not** increment the global execution counter
+        (``increment_execution_count``). Nested tool executions are
+        sub-steps of a single block run from the user's perspective and
+        should not push them into higher per-execution cost tiers.
+        """
+        total_cost, remaining = await asyncio.get_event_loop().run_in_executor(
+            None, self._charge_usage, node_exec, 0
+        )
+        if total_cost > 0:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                self._handle_low_balance,
+                get_db_client(),
+                node_exec.user_id,
+                remaining,
+                total_cost,
+            )
+        return total_cost, remaining
 
     @time_measured
     def _on_graph_execution(
