@@ -1294,6 +1294,16 @@ class TestAnthropicCacheControl:
     """Verify that llm_call attaches cache_control to the system prompt block
     and to the last tool definition when calling the Anthropic API."""
 
+    @pytest.fixture(autouse=True)
+    def disable_openrouter_routing(self):
+        """Ensure tests exercise the direct-Anthropic path by suppressing the
+        OpenRouter API key. Without this, a local .env with OPEN_ROUTER_API_KEY
+        set would silently reroute all Anthropic calls through OpenRouter,
+        bypassing the cache_control code under test."""
+        with patch("backend.blocks.llm.settings") as mock_settings:
+            mock_settings.secrets.open_router_api_key = ""
+            yield mock_settings
+
     def _make_anthropic_credentials(self) -> llm.APIKeyCredentials:
         from pydantic import SecretStr
 
