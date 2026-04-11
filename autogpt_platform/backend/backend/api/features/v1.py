@@ -729,8 +729,12 @@ def _validate_checkout_redirect_url(url: str) -> bool:
 
 
 @cached(ttl_seconds=300, maxsize=32)
-async def _get_stripe_price_amount(price_id: str) -> int:
+async def _get_stripe_price_amount(price_id: str) -> int | None:
     """Return the unit_amount (cents) for a Stripe Price ID, cached for 5 minutes.
+
+    Returns ``None`` on transient Stripe errors so the ``@cached`` decorator
+    (which skips caching ``None``) does not store the error state.  Callers
+    should treat ``None`` as an unknown price and fall back to 0.
 
     Stripe prices rarely change; caching avoids a ~200-600 ms Stripe round-trip on
     every GET /credits/subscription page load and reduces quota consumption.
@@ -739,8 +743,11 @@ async def _get_stripe_price_amount(price_id: str) -> int:
         price = await run_in_threadpool(stripe.Price.retrieve, price_id)
         return price.unit_amount or 0
     except stripe.StripeError:
-        logger.warning("Failed to retrieve Stripe price %s — returning 0", price_id)
-        return 0
+        logger.warning(
+            "Failed to retrieve Stripe price %s — returning None (not cached)",
+            price_id,
+        )
+        return None
 
 
 @v1_router.get(
@@ -767,7 +774,7 @@ async def get_subscription_status(
     }
 
     async def _cost(pid: str | None) -> int:
-        return await _get_stripe_price_amount(pid) if pid else 0
+        return (await _get_stripe_price_amount(pid) or 0) if pid else 0
 
     costs = await asyncio.gather(*[_cost(pid) for pid in price_ids])
     for t, cost in zip(paid_tiers, costs):

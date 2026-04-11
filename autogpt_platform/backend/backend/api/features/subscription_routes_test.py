@@ -119,6 +119,48 @@ def test_get_subscription_status_defaults_to_free(
     }
 
 
+def test_get_subscription_status_stripe_error_falls_back_to_zero(
+    client: fastapi.testclient.TestClient,
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """GET /credits/subscription returns cost=0 when Stripe price fetch fails (returns None).
+
+    _get_stripe_price_amount returns None on StripeError so the error state is
+    not cached.  The endpoint must treat None as 0 — not raise or return invalid data.
+    """
+    mock_user = Mock()
+    mock_user.subscription_tier = SubscriptionTier.PRO
+
+    async def mock_price_id(tier: SubscriptionTier) -> str | None:
+        return "price_pro" if tier == SubscriptionTier.PRO else None
+
+    async def mock_stripe_price_amount_none(price_id: str) -> None:
+        return None
+
+    mocker.patch(
+        "backend.api.features.v1.get_user_by_id",
+        new_callable=AsyncMock,
+        return_value=mock_user,
+    )
+    mocker.patch(
+        "backend.api.features.v1.get_subscription_price_id",
+        side_effect=mock_price_id,
+    )
+    mocker.patch(
+        "backend.api.features.v1._get_stripe_price_amount",
+        side_effect=mock_stripe_price_amount_none,
+    )
+
+    response = client.get("/credits/subscription")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tier"] == "PRO"
+    # When Stripe returns None, cost falls back to 0
+    assert data["monthly_cost"] == 0
+    assert data["tier_costs"]["PRO"] == 0
+
+
 def test_update_subscription_tier_free_no_payment(
     client: fastapi.testclient.TestClient,
     mocker: pytest_mock.MockFixture,
