@@ -580,6 +580,32 @@ async def test_build_setup_requirements_returns_none_for_non_credential_error(
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_build_setup_requirements_returns_none_for_mixed_errors(
+    setup_firecrawl_test_data,
+):
+    """Mixed credential + structural errors must fall through to the plain
+    ErrorResponse path so structural errors are not hidden from the user."""
+    graph = setup_firecrawl_test_data["graph"]
+    tool = RunAgentTool()
+
+    error = GraphValidationError(
+        message="Graph is invalid",
+        node_errors={
+            "node-a": {"credentials": "These credentials are required"},
+            "node-b": {"url": "Input field 'url' is required"},
+        },
+    )
+
+    response = tool._build_setup_requirements_from_validation_error(
+        graph=graph,
+        error=error,
+        session_id="test-session",
+    )
+
+    assert response is None
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_run_agent_schedule_credential_race_returns_setup_card(
     setup_test_data,
 ):

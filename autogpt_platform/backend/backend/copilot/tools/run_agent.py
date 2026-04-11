@@ -381,12 +381,19 @@ class RunAgentTool(BaseTool):
         fields are shown as missing so the user sees exactly which
         accounts to reconnect.
         """
-        has_credential_error = any(
-            is_credential_validation_error_message(msg)
+        all_messages = [
+            msg
             for node_errors in error.node_errors.values()
             for msg in node_errors.values()
-        )
-        if not has_credential_error:
+        ]
+        # Only surface the credential-setup UI when ALL errors are credential-
+        # related.  If there are also structural errors (missing inputs, invalid
+        # node config), fall through to the plain error path so those errors are
+        # not hidden from the user — they would surface on the next run attempt
+        # after the credential fix, creating a confusing two-step failure.
+        if not all_messages or not all(
+            is_credential_validation_error_message(msg) for msg in all_messages
+        ):
             return None
 
         # Show all credential fields as missing — in the race case the
