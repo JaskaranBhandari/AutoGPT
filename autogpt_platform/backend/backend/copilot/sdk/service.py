@@ -2258,35 +2258,63 @@ async def stream_chat_completion_sdk(
         # versions can talk to OpenRouter without their stricter
         # validation rejecting the request.
         if config.claude_agent_use_compat_proxy:
-            from backend.copilot.sdk.openrouter_compat_proxy import (
-                OpenRouterCompatProxy,
-            )
+            # Only start the compat proxy when there's already an
+            # explicit Anthropic-compatible upstream to forward to.
+            # Otherwise we'd be silently routing direct Anthropic /
+            # Claude Code subscription sessions through OpenRouter,
+            # which would break auth and change providers without
+            # operator consent.  The explicit upstream can come from:
+            #
+            # 1. ``sdk_env['ANTHROPIC_BASE_URL']`` — caller override;
+            # 2. the process env — lowest-precedence host override;
+            # 3. ``ChatConfig.openrouter_active`` — OpenRouter is
+            #    configured as the session's routing provider (i.e.
+            #    the only case in which falling back to
+            #    ``OPENROUTER_BASE_URL`` is intentional).
+            #
+            # When none of the above hold, log a warning and leave
+            # the CLI to talk to Anthropic directly as usual — the
+            # feature is opt-in and documented as "OpenRouter
+            # compatibility", so quietly no-oping on direct-Anthropic
+            # sessions is the safe default.
+            target_base_url: str | None = (sdk_env or {}).get(
+                "ANTHROPIC_BASE_URL"
+            ) or os.environ.get("ANTHROPIC_BASE_URL")
+            if not target_base_url and config.openrouter_active:
+                from backend.util.clients import OPENROUTER_BASE_URL
 
-            # Use the same upstream URL the SDK would have hit directly.
-            # Prefer an explicit override in ``sdk_env`` (e.g. set by a
-            # caller wanting to test against a specific gateway), then
-            # the parent process env, then the platform-wide
-            # ``OPENROUTER_BASE_URL`` constant.
-            from backend.util.clients import OPENROUTER_BASE_URL
+                target_base_url = OPENROUTER_BASE_URL
 
-            target_base_url = (
-                (sdk_env or {}).get("ANTHROPIC_BASE_URL")
-                or os.environ.get("ANTHROPIC_BASE_URL")
-                or OPENROUTER_BASE_URL
-            )
-            _compat_proxy = OpenRouterCompatProxy(target_base_url=target_base_url)
-            await _compat_proxy.start()
-            # Inject the proxy URL into the SDK env so the spawned CLI
-            # subprocess uses the proxy as its Anthropic endpoint.
-            if sdk_env is None:
-                sdk_env = {}
-            sdk_env["ANTHROPIC_BASE_URL"] = _compat_proxy.local_url
-            logger.info(
-                "%s OpenRouter compat proxy active: %s -> %s",
-                log_prefix,
-                _compat_proxy.local_url,
-                _compat_proxy.target_base_url,
-            )
+            if target_base_url:
+                from backend.copilot.sdk.openrouter_compat_proxy import (
+                    OpenRouterCompatProxy,
+                )
+
+                _compat_proxy = OpenRouterCompatProxy(target_base_url=target_base_url)
+                await _compat_proxy.start()
+                # Inject the proxy URL into the SDK env so the spawned
+                # CLI subprocess uses the proxy as its Anthropic
+                # endpoint.
+                if sdk_env is None:
+                    sdk_env = {}
+                sdk_env["ANTHROPIC_BASE_URL"] = _compat_proxy.local_url
+                # Log only the local bind URL — upstream is redacted
+                # to match the taint-analysis guidance applied in
+                # ``openrouter_compat_proxy.start``.
+                logger.info(
+                    "%s OpenRouter compat proxy active (listening on %s)",
+                    log_prefix,
+                    _compat_proxy.local_url,
+                )
+            else:
+                logger.warning(
+                    "%s claude_agent_use_compat_proxy is enabled but no "
+                    "Anthropic-compatible upstream is configured for this "
+                    "session (no ANTHROPIC_BASE_URL override and "
+                    "openrouter_active is False); skipping proxy startup "
+                    "so the CLI keeps talking to Anthropic directly.",
+                    log_prefix,
+                )
 
         if sdk_env:
             sdk_options_kwargs["env"] = sdk_env

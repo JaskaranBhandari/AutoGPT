@@ -102,6 +102,24 @@ class TestStripToolReferenceBlocks:
         assert strip_tool_reference_blocks(42) == 42
         assert strip_tool_reference_blocks(None) is None
 
+    def test_removes_dict_valued_tool_reference_child_entirely(self):
+        # Regression guard: when a tool_reference dict is assigned to
+        # a key rather than listed, the helper used to rewrite it to
+        # `null` (leaving the parent key with a None value). That is
+        # still schema-invalid upstream — remove the key entirely.
+        payload = {
+            "wrapper": {"type": "tool_reference", "tool_name": "find_block"},
+            "keep": "value",
+        }
+        cleaned = strip_tool_reference_blocks(payload)
+        assert "wrapper" not in cleaned
+        assert cleaned["keep"] == "value"
+
+    def test_preserves_genuine_none_values_on_non_dict_children(self):
+        payload = {"explicit_null": None, "text": "ok"}
+        cleaned = strip_tool_reference_blocks(payload)
+        assert cleaned == {"explicit_null": None, "text": "ok"}
+
 
 # ---------------------------------------------------------------------------
 # strip_forbidden_betas_from_body
@@ -250,8 +268,42 @@ class TestCleanRequestHeaders:
     def test_hop_by_hop_set_completeness(self):
         # Sanity check: if upstream removes hop-by-hop headers from
         # this set we want to know — keep the canonical RFC 7230 list.
-        for required in ("connection", "transfer-encoding", "host"):
+        for required in (
+            "connection",
+            "transfer-encoding",
+            "host",
+            "trailer",
+            "trailers",
+        ):
             assert required in _HOP_BY_HOP_HEADERS
+
+    def test_drops_headers_listed_in_connection_field(self):
+        # Per RFC 7230 §6.1 intermediaries must also drop every
+        # header name listed in the incoming Connection field value
+        # (extension hop-by-hop headers signalled per-connection).
+        headers = {
+            "Connection": "X-Custom-Hop, Upgrade",
+            "X-Custom-Hop": "secret-extension",
+            "Authorization": "Bearer x",
+            "X-Keep": "ok",
+        }
+        cleaned = clean_request_headers(headers)
+        assert "X-Custom-Hop" not in cleaned
+        # Upgrade is a static hop-by-hop header; Connection itself is
+        # also dropped; the rest pass through.
+        assert "Connection" not in cleaned
+        assert cleaned["Authorization"] == "Bearer x"
+        assert cleaned["X-Keep"] == "ok"
+
+    def test_connection_token_matching_is_case_insensitive(self):
+        headers = {
+            "Connection": "x-hop-HEADER",
+            "X-Hop-Header": "drop-me",
+            "X-Keep": "ok",
+        }
+        cleaned = clean_request_headers(headers)
+        assert "X-Hop-Header" not in cleaned
+        assert cleaned["X-Keep"] == "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +512,68 @@ async def test_proxy_returns_502_on_upstream_failure():
         pass
     finally:
         await proxy.stop()
+
+
+@pytest.mark.asyncio
+async def test_proxy_returns_502_on_upstream_timeout():
+    """``aiohttp.ClientTimeout`` raises ``asyncio.TimeoutError`` (not
+    ``aiohttp.ClientError``), which previously escaped the except
+    block and surfaced as a 500.  This regression-guards the 502
+    contract for hung upstreams."""
+
+    class _HangingUpstream:
+        """Upstream that accepts the request but never finishes the
+        response body, forcing the proxy's client timeout to fire."""
+
+        def __init__(self) -> None:
+            self._runner: web.AppRunner | None = None
+            self.port: int = 0
+
+        async def start(self) -> str:
+            async def handler(request: web.Request) -> web.StreamResponse:
+                # Hold the response open longer than the proxy's
+                # client timeout so aiohttp raises TimeoutError on
+                # the proxy side.
+                await asyncio.sleep(30)
+                return web.Response(status=200)
+
+            app = web.Application()
+            app.router.add_route("*", "/{tail:.*}", handler)
+            self._runner = web.AppRunner(app)
+            await self._runner.setup()
+            site = web.TCPSite(self._runner, "127.0.0.1", 0)
+            await site.start()
+            server = site._server
+            assert server is not None
+            sockets = getattr(server, "sockets", None)
+            assert sockets is not None
+            self.port = sockets[0].getsockname()[1]
+            return f"http://127.0.0.1:{self.port}"
+
+        async def stop(self) -> None:
+            if self._runner is not None:
+                await self._runner.cleanup()
+                self._runner = None
+
+    upstream = _HangingUpstream()
+    upstream_url = await upstream.start()
+    # Short proxy timeout so the test finishes quickly.
+    proxy = OpenRouterCompatProxy(target_base_url=upstream_url, request_timeout=0.5)
+    await proxy.start()
+    try:
+        async with aiohttp.ClientSession() as client:
+            async with client.post(
+                f"{proxy.local_url}/v1/messages",
+                json={"model": "x"},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                assert resp.status == 502
+                text = await resp.text()
+                # Generic error message — no internal hostname leaked.
+                assert "upstream error" in text
+    finally:
+        await proxy.stop()
+        await upstream.stop()
 
 
 @pytest.mark.asyncio

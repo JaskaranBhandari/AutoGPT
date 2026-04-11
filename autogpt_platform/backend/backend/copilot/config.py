@@ -195,7 +195,13 @@ class ChatConfig(BaseSettings):
         "field from outgoing requests so newer SDK / CLI versions stop "
         "tripping OpenRouter's stricter validation. Orthogonal to "
         "`claude_agent_cli_path` — the override picks the binary, the "
-        "proxy rewrites whatever the binary sends.",
+        "proxy rewrites whatever the binary sends. Reads from "
+        "`CHAT_CLAUDE_AGENT_USE_COMPAT_PROXY` or the unprefixed "
+        "`CLAUDE_AGENT_USE_COMPAT_PROXY` environment variable (same "
+        "pattern as `claude_agent_cli_path`). Only takes effect when "
+        "the session has an Anthropic-compatible upstream to forward "
+        "to — direct-Anthropic sessions skip the proxy entirely to "
+        "avoid silently re-routing through OpenRouter.",
     )
     use_openrouter: bool = Field(
         default=True,
@@ -337,6 +343,26 @@ class ChatConfig(BaseSettings):
             v = os.getenv("CHAT_CLAUDE_AGENT_CLI_PATH")
             if not v:
                 v = os.getenv("CLAUDE_AGENT_CLI_PATH")
+        return v
+
+    @field_validator("claude_agent_use_compat_proxy", mode="before")
+    @classmethod
+    def get_claude_agent_use_compat_proxy(cls, v):
+        """Resolve the compat-proxy opt-in from environment.
+
+        Accepts either ``CHAT_CLAUDE_AGENT_USE_COMPAT_PROXY`` (the
+        Pydantic-prefixed form) or the unprefixed
+        ``CLAUDE_AGENT_USE_COMPAT_PROXY`` — same dual-name pattern as
+        ``claude_agent_cli_path`` above and ``api_key`` / ``base_url``
+        further up. Returning the raw string lets Pydantic handle the
+        usual truthy/falsy coercion (``"1"``, ``"true"``, ``"yes"``,
+        ``"on"`` → True), so operators get the same behaviour they'd
+        get from the prefixed env var.
+        """
+        if v is None:
+            v = os.getenv("CHAT_CLAUDE_AGENT_USE_COMPAT_PROXY")
+            if v is None:
+                v = os.getenv("CLAUDE_AGENT_USE_COMPAT_PROXY")
         return v
 
     # Prompt paths for different contexts

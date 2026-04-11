@@ -81,6 +81,13 @@ _FORBIDDEN_BETA_TOKENS: frozenset[str] = frozenset(
 # RFC 7230 §6.1, these are connection-specific and must be regenerated
 # by each intermediary.  ``host`` is also stripped because aiohttp
 # generates the correct ``Host`` header for the upstream URL itself.
+#
+# The canonical header name defined in RFC 7230 §4.4 is ``Trailer``
+# (singular); some SDKs / legacy proxies also emit the plural
+# ``Trailers`` so we accept both forms just in case.  Intermediaries
+# must additionally drop every header name listed in the incoming
+# ``Connection`` field value (§6.1 "extension hop-by-hop headers") —
+# that's handled dynamically by :func:`clean_request_headers`.
 _HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
     {
         "connection",
@@ -88,6 +95,7 @@ _HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
         "proxy-authenticate",
         "proxy-authorization",
         "te",
+        "trailer",
         "trailers",
         "transfer-encoding",
         "upgrade",
@@ -128,6 +136,13 @@ def strip_tool_reference_blocks(payload: Any) -> Any:
         cleaned_dict: dict[str, Any] = {}
         for key, value in payload.items():
             cleaned_value = strip_tool_reference_blocks(value)
+            # If a dict-valued child WAS a tool_reference block,
+            # drop the key entirely rather than writing `null` —
+            # otherwise schema-strict upstreams still reject the
+            # payload.  Only applies when the original value was a
+            # dict; genuine None values in the input are preserved.
+            if cleaned_value is None and isinstance(value, dict):
+                continue
             cleaned_dict[key] = cleaned_value
         return cleaned_dict
     if isinstance(payload, list):
@@ -203,14 +218,32 @@ def clean_request_headers(headers: dict[str, str]) -> dict[str, str]:
     forbidden tokens.  Returns a fresh dict the caller can pass through
     to the upstream client without further mutation.
 
+    Per RFC 7230 §6.1, intermediaries must drop the static hop-by-hop
+    set above **and** every header name listed in the incoming
+    ``Connection`` field value (case-insensitive).  The latter is how
+    extension hop-by-hop headers are signalled per-connection.
+
     Callers should pass an already-materialised ``dict`` (e.g.
     ``dict(request.headers)``) so this function stays simple.
     """
+    # Parse ``Connection: a, b, c`` into a lowercase token set so we
+    # can drop any header the sender explicitly marked as hop-by-hop
+    # on this connection.  This is separate from the static set
+    # above — extension headers can be anything.
+    connection_header = next(
+        (value for name, value in headers.items() if name.lower() == "connection"),
+        "",
+    )
+    connection_tokens: set[str] = {
+        token.strip().lower() for token in connection_header.split(",") if token.strip()
+    }
+
     cleaned: dict[str, str] = {}
     for name, value in headers.items():
-        if name.lower() in _HOP_BY_HOP_HEADERS:
+        lower_name = name.lower()
+        if lower_name in _HOP_BY_HOP_HEADERS or lower_name in connection_tokens:
             continue
-        if name.lower() == "anthropic-beta":
+        if lower_name == "anthropic-beta":
             stripped = strip_forbidden_anthropic_beta_header(value)
             if stripped is None:
                 continue
@@ -269,10 +302,17 @@ class OpenRouterCompatProxy:
         return self._target_base_url
 
     async def start(self) -> None:
-        """Bind to a random local port and start serving."""
+        """Bind to a random local port and start serving.
+
+        Cleans up the ``ClientSession`` and the ``AppRunner`` on any
+        failure during setup so a partially-initialised proxy never
+        leaves resources dangling (covers the
+        ``runner.setup() / site.start()`` raise paths in addition to
+        the explicit bind-failure branches below).
+        """
         if self._runner is not None:
             return  # already started
-        self._client = aiohttp.ClientSession(
+        client = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=self._request_timeout)
         )
         app = web.Application()
@@ -280,20 +320,35 @@ class OpenRouterCompatProxy:
         # (the CLI may probe profile / model endpoints).
         app.router.add_route("*", "/{tail:.*}", self._handle)
         runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, self._bind_host, 0)
-        await site.start()
-        server = site._server
-        if server is None:
-            await runner.cleanup()
-            await self._client.close()
-            raise RuntimeError("Failed to bind compat proxy server.")
-        sockets = getattr(server, "sockets", None)
-        if not sockets:
-            await runner.cleanup()
-            await self._client.close()
-            raise RuntimeError("Compat proxy server has no listening sockets.")
-        self._port = sockets[0].getsockname()[1]
+        runner_setup = False
+        try:
+            await runner.setup()
+            runner_setup = True
+            site = web.TCPSite(runner, self._bind_host, 0)
+            await site.start()
+            server = site._server
+            if server is None:
+                raise RuntimeError("Failed to bind compat proxy server.")
+            sockets = getattr(server, "sockets", None)
+            if not sockets:
+                raise RuntimeError("Compat proxy server has no listening sockets.")
+            self._port = sockets[0].getsockname()[1]
+        except BaseException:
+            # Best-effort teardown — swallow secondary errors so the
+            # caller sees the original exception.
+            if runner_setup:
+                try:
+                    await runner.cleanup()
+                except Exception:  # pragma: no cover - cleanup-only path
+                    logger.exception("compat proxy runner cleanup failed")
+            try:
+                await client.close()
+            except Exception:  # pragma: no cover - cleanup-only path
+                logger.exception("compat proxy client close failed")
+            raise
+        # Only publish the attributes after everything is wired up so
+        # ``stop()`` and ``local_url`` observe a consistent state.
+        self._client = client
         self._runner = runner
         # Deliberately log only the local bind port — never the
         # upstream URL or any derived component. CodeQL's
@@ -362,7 +417,12 @@ class OpenRouterCompatProxy:
                 headers=cleaned_headers,
                 allow_redirects=False,
             )
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            # ``aiohttp.ClientTimeout`` raises ``asyncio.TimeoutError``
+            # (not ``aiohttp.ClientError``) on hung upstreams, so both
+            # must be caught here to surface the explicit 502 failure
+            # mode this proxy guarantees.
+            #
             # Log the detailed error for ops, but return a generic
             # message to the caller — exception strings can leak
             # internal hostnames, ports, or stack frames (CodeQL
@@ -379,12 +439,24 @@ class OpenRouterCompatProxy:
             headers=clean_request_headers(dict(upstream_response.headers)),
         )
         await downstream.prepare(request)
+        cancelled = False
         try:
             async for chunk in upstream_response.content.iter_any():
                 await downstream.write(chunk)
-        except (aiohttp.ClientError, asyncio.CancelledError) as e:
+        except asyncio.CancelledError:
+            # Never suppress cancellation — since Python 3.8 it's a
+            # ``BaseException`` subclass precisely so catching
+            # ``Exception`` won't accidentally swallow it.  Release
+            # the upstream body and re-raise so the asyncio task
+            # cooperatively unwinds (avoids hanging shutdowns /
+            # stuck request handlers).
+            cancelled = True
+            upstream_response.release()
+            raise
+        except aiohttp.ClientError as e:
             logger.warning("OpenRouter compat proxy stream interrupted: %s", e)
         finally:
-            upstream_response.release()
+            if not cancelled:
+                upstream_response.release()
         await downstream.write_eof()
         return downstream
