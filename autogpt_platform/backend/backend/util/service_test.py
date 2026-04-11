@@ -562,6 +562,95 @@ class TestHTTPErrorRetryBehavior:
         assert "Graph validation failed" in str(exc_info.value)
         assert exc_info.value.node_errors == {}
 
+    def test_graph_validation_error_server_handler_packs_node_errors(self):
+        """Server-side symmetry: ``_handle_internal_http_error`` must pack
+        ``GraphValidationError.node_errors`` into the ``extras`` field so
+        the client-side round-trip test above has something real to
+        decode. Without this parity test, dropping the
+        ``isinstance(exc, GraphValidationError)`` branch in the server
+        handler would go unnoticed — the client tests mock the wire
+        payload directly and wouldn't catch it.
+        """
+        import orjson
+
+        from backend.util.service import RemoteCallError
+
+        node_errors = {
+            "node-a": {
+                "credentials": "These credentials are required",
+                "api_key": "Invalid credentials: bad shape",
+            },
+            "node-b": {"token": "Unknown credentials #xyz"},
+        }
+
+        # Build the FastAPI exception handler and invoke it with a
+        # real GraphValidationError.
+        handler = AppService._handle_internal_http_error(status_code=400)
+        exc = GraphValidationError(
+            "Graph validation failed: 3 issues on 2 nodes",
+            node_errors=node_errors,
+        )
+        # The handler signature takes (request, exc); request is unused
+        # by our code path, so a Mock() is fine.
+        json_response = handler(Mock(), exc)
+
+        # The body is bytes-encoded JSON — decode and validate the
+        # shape matches the RemoteCallError model.
+        decoded = orjson.loads(bytes(json_response.body))
+        rebuilt = RemoteCallError.model_validate(decoded)
+
+        assert rebuilt.type == "GraphValidationError"
+        assert rebuilt.args is not None
+        assert "Graph validation failed" in str(rebuilt.args[0])
+        assert rebuilt.extras is not None
+        assert rebuilt.extras.node_errors == node_errors
+
+    def test_graph_validation_error_round_trips_through_handlers(self):
+        """Full round-trip: server handler packs a real
+        ``GraphValidationError`` → client handler decodes and reconstructs
+        the original exception with ``node_errors`` preserved.
+
+        This closes the asymmetry between the server-packs and
+        client-unpacks tests — if either side drifts, this test fails
+        even when both one-sided tests pass.
+        """
+        import orjson
+
+        node_errors = {
+            "node-x": {"credentials": "These credentials are required"},
+        }
+
+        # Server side.
+        handler = AppService._handle_internal_http_error(status_code=400)
+        exc = GraphValidationError(
+            "Graph validation failed: 1 issues on 1 nodes",
+            node_errors=node_errors,
+        )
+        json_response = handler(Mock(), exc)
+        wire_payload = orjson.loads(bytes(json_response.body))
+
+        # Client side — replay the wire payload through the real
+        # ``_handle_call_method_response``.
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.json.return_value = wire_payload
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "400 Bad Request", request=Mock(), response=mock_response
+        )
+
+        client = cast(
+            _SupportsHandleCallMethodResponse,
+            get_service_client(ServiceTestClient),
+        )
+
+        with pytest.raises(GraphValidationError) as exc_info:
+            client._handle_call_method_response(
+                response=mock_response, method_name="test_method"
+            )
+
+        assert "Graph validation failed" in str(exc_info.value)
+        assert exc_info.value.node_errors == node_errors
+
     def test_client_error_status_codes_coverage(self):
         """Test that various 4xx status codes are all wrapped as HTTPClientError."""
         client_error_codes = [400, 401, 403, 404, 405, 409, 422, 429]

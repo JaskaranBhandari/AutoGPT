@@ -156,6 +156,20 @@ class BaseAppService(AppProcess, ABC):
         super().cleanup()
 
 
+class RemoteCallExtras(BaseModel):
+    """Structured extras that can ride alongside a ``RemoteCallError``.
+
+    Each field here must be JSON-safe and explicitly typed — ``Any`` is
+    deliberately avoided so non-serializable payloads fail at model
+    validation time instead of inside FastAPI's JSON encoder. Add new
+    fields here (rather than re-typing to ``Any``) when a new exception
+    type needs to preserve structured state across RPC.
+    """
+
+    # GraphValidationError.node_errors — dict[node_id, dict[field, error_msg]]
+    node_errors: Optional[dict[str, dict[str, str]]] = None
+
+
 class RemoteCallError(BaseModel):
     type: str = "RemoteCallError"
     args: Optional[Tuple[Any, ...]] = None
@@ -165,7 +179,7 @@ class RemoteCallError(BaseModel):
     # Currently used by ``GraphValidationError.node_errors`` so the
     # copilot's credential-race fallback can distinguish credential
     # failures from other graph validation errors over RPC.
-    extras: Optional[dict[str, Any]] = None
+    extras: Optional[RemoteCallExtras] = None
 
 
 class UnhealthyServiceError(ValueError):
@@ -245,7 +259,7 @@ class AppService(BaseAppService, ABC):
                         f"{request.method} {request.url.path} failed: {exc}",
                         exc_info=exc,
                     )
-            extras: Optional[dict[str, Any]] = None
+            extras: Optional[RemoteCallExtras] = None
             if isinstance(exc, exceptions.GraphValidationError):
                 # ``exc.args`` only preserves the top-level message; the
                 # structured ``node_errors`` mapping needs to ride along
@@ -253,7 +267,16 @@ class AppService(BaseAppService, ABC):
                 # exception state (used by the copilot credential-race
                 # fallback to distinguish credential failures from other
                 # validation errors).
-                extras = {"node_errors": dict(exc.node_errors)}
+                # Normalise to plain ``dict[str, dict[str, str]]`` so
+                # Pydantic validation enforces the JSON-safe shape —
+                # any non-serializable sneak-in fails here instead of
+                # inside the JSON encoder.
+                extras = RemoteCallExtras(
+                    node_errors={
+                        node_id: dict(errors)
+                        for node_id, errors in exc.node_errors.items()
+                    },
+                )
             return responses.JSONResponse(
                 status_code=status_code,
                 content=RemoteCallError(
@@ -638,7 +661,7 @@ def get_service_client(
                     if issubclass(exception_class, exceptions.GraphValidationError):
                         msg = str(args[0]) if args else str(e)
                         node_errors = (
-                            error_response.extras.get("node_errors")
+                            error_response.extras.node_errors
                             if error_response.extras
                             else None
                         )
