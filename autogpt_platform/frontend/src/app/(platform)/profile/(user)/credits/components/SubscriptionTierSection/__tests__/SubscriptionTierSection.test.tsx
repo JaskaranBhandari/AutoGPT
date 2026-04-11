@@ -245,10 +245,10 @@ describe("SubscriptionTierSection", () => {
   });
 
   it("redirects to Stripe when checkout URL is returned", async () => {
-    const originalLocation = window.location;
-    // @ts-expect-error – jsdom location is not writable; cast for test purposes
-    delete window.location;
-    window.location = { ...originalLocation, href: "" } as Location;
+    // Replace window.location with a plain object so assigning .href doesn't
+    // trigger jsdom navigation (which would throw or reload the test page).
+    const mockLocation = { href: "" };
+    vi.stubGlobal("location", mockLocation);
 
     const mutateFn = vi.fn().mockResolvedValue({
       status: 200,
@@ -260,12 +260,10 @@ describe("SubscriptionTierSection", () => {
     fireEvent.click(screen.getByRole("button", { name: /upgrade to pro/i }));
 
     await waitFor(() => {
-      expect(window.location.href).toBe(
-        "https://checkout.stripe.com/pay/cs_test",
-      );
+      expect(mockLocation.href).toBe("https://checkout.stripe.com/pay/cs_test");
     });
 
-    window.location = originalLocation;
+    vi.unstubAllGlobals();
   });
 
   it("shows an error alert when tier change fails", async () => {

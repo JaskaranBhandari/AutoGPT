@@ -192,7 +192,9 @@ export function SubscriptionTierSection() {
         title="Confirm Downgrade"
         controlled={{
           isOpen: !!confirmDowngradeTo,
-          set: (open) => !open && setConfirmDowngradeTo(null),
+          set: (open) => {
+            if (!open) setConfirmDowngradeTo(null);
+          },
         }}
       >
         <Dialog.Content>
