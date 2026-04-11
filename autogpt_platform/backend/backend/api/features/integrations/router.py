@@ -87,14 +87,23 @@ async def login(
     scopes: Annotated[
         str, Query(title="Comma-separated list of authorization scopes")
     ] = "",
+    credential_id: Annotated[
+        str | None,
+        Query(title="ID of existing credential to upgrade scopes for"),
+    ] = None,
 ) -> LoginResponse:
     handler = _get_provider_oauth_handler(request, provider)
 
     requested_scopes = scopes.split(",") if scopes else []
 
+    if credential_id:
+        requested_scopes = await _prepare_scope_upgrade(
+            user_id, provider, credential_id, requested_scopes
+        )
+
     # Generate and store a secure random state token along with the scopes
     state_token, code_challenge = await creds_manager.store.store_state_token(
-        user_id, provider, requested_scopes
+        user_id, provider, requested_scopes, credential_id=credential_id
     )
     login_url = handler.get_login_url(
         requested_scopes, state_token, code_challenge=code_challenge
@@ -216,7 +225,9 @@ async def callback(
         )
 
     # TODO: Allow specifying `title` to set on `credentials`
-    await creds_manager.create(user_id, credentials)
+    credentials = await _merge_or_create_credential(
+        user_id, provider, credentials, valid_state.credential_id
+    )
 
     logger.debug(
         f"Successfully processed OAuth callback for user {user_id} "
@@ -572,6 +583,114 @@ async def _execute_webhook_preset_trigger(
             f"Failed to execute preset #{preset.id} via webhook #{webhook_id}"
         )
         # Continue processing - webhook should be resilient to individual failures
+
+
+# -------------------- INCREMENTAL AUTH HELPERS -------------------- #
+
+
+async def _prepare_scope_upgrade(
+    user_id: str,
+    provider: ProviderName,
+    credential_id: str,
+    requested_scopes: list[str],
+) -> list[str]:
+    """Validate an existing credential for scope upgrade and compute scopes.
+
+    For providers without native incremental auth (e.g. GitHub), returns the
+    union of existing + requested scopes.  For providers that handle merging
+    server-side (e.g. Google with ``include_granted_scopes``), returns the
+    requested scopes unchanged.
+
+    Raises HTTPException on validation failure.
+    """
+    existing = await creds_manager.store.get_creds_by_id(user_id, credential_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Credential to upgrade not found",
+        )
+    if not isinstance(existing, OAuth2Credentials):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only OAuth2 credentials can be upgraded",
+        )
+    if existing.provider != provider and existing.provider != provider.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Credential provider does not match the requested provider",
+        )
+
+    # Google handles scope merging via include_granted_scopes; others need
+    # the union of existing + new scopes in the login URL.
+    if provider != ProviderName.GOOGLE:
+        requested_scopes = list(set(requested_scopes) | set(existing.scopes))
+
+    return requested_scopes
+
+
+async def _merge_or_create_credential(
+    user_id: str,
+    provider: ProviderName,
+    credentials: OAuth2Credentials,
+    credential_id: str | None,
+) -> OAuth2Credentials:
+    """Either upgrade an existing credential or create a new one.
+
+    When *credential_id* is set (explicit upgrade), merges scopes and updates
+    the existing credential.  Otherwise, checks for an implicit merge (same
+    provider + username) before falling back to creating a new credential.
+    """
+    if credential_id:
+        return await _upgrade_existing_credential(user_id, credential_id, credentials)
+
+    # Implicit merge: check for existing credential with same provider+username
+    existing_creds = await creds_manager.store.get_creds_by_provider(user_id, provider)
+    matching = next(
+        (
+            c
+            for c in existing_creds
+            if isinstance(c, OAuth2Credentials)
+            and c.username is not None
+            and c.username == credentials.username
+        ),
+        None,
+    )
+    if matching:
+        return await _upgrade_existing_credential(user_id, matching.id, credentials)
+
+    await creds_manager.create(user_id, credentials)
+    return credentials
+
+
+async def _upgrade_existing_credential(
+    user_id: str,
+    existing_cred_id: str,
+    new_credentials: OAuth2Credentials,
+) -> OAuth2Credentials:
+    """Merge scopes from *new_credentials* into an existing credential."""
+    existing = await creds_manager.store.get_creds_by_id(user_id, existing_cred_id)
+    if not existing or not isinstance(existing, OAuth2Credentials):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Credential to upgrade not found",
+        )
+
+    if (
+        existing.username
+        and new_credentials.username
+        and existing.username != new_credentials.username
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username mismatch: authenticated as a different user",
+        )
+
+    merged_scopes = list(set(existing.scopes) | set(new_credentials.scopes))
+    new_credentials.id = existing.id
+    new_credentials.title = existing.title
+    new_credentials.scopes = merged_scopes
+    await creds_manager.update(user_id, new_credentials)
+    return new_credentials
 
 
 # --------------------------- UTILITIES ---------------------------- #

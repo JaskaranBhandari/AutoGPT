@@ -305,9 +305,15 @@ export default class BackendAPI {
   oAuthLogin(
     provider: string,
     scopes?: string[],
+    credentialID?: string,
   ): Promise<{ login_url: string; state_token: string }> {
-    const query = scopes ? { scopes: scopes.join(",") } : undefined;
-    return this._get(`/integrations/${provider}/login`, query);
+    const query: Record<string, string> = {};
+    if (scopes) query.scopes = scopes.join(",");
+    if (credentialID) query.credential_id = credentialID;
+    return this._get(
+      `/integrations/${provider}/login`,
+      Object.keys(query).length > 0 ? query : undefined,
+    );
   }
 
   oAuthCallback(

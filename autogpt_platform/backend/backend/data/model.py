@@ -453,6 +453,8 @@ class OAuthState(BaseModel):
     code_verifier: Optional[str] = None
     """Unix timestamp (seconds) indicating when this OAuth state expires"""
     scopes: list[str]
+    credential_id: Optional[str] = None
+    """If set, this OAuth flow upgrades an existing credential's scopes."""
     # Fields for external API OAuth flows
     callback_url: Optional[str] = None
     """External app's callback URL for OAuth redirect"""

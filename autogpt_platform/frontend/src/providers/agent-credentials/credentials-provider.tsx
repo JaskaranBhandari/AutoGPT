@@ -83,7 +83,7 @@ export default function CredentialsProvider({
   const api = useBackendAPI();
   const onFailToast = useToastOnFail();
 
-  const addCredentials = useCallback(
+  const upsertCredentials = useCallback(
     (
       provider: CredentialsProviderName,
       credentials: CredentialsMetaResponse,
@@ -91,11 +91,18 @@ export default function CredentialsProvider({
       setProviders((prev) => {
         if (!prev || !prev[provider]) return prev;
 
+        const existing = prev[provider].savedCredentials;
+        const idx = existing.findIndex((c) => c.id === credentials.id);
+        const updated =
+          idx >= 0
+            ? existing.map((c, i) => (i === idx ? credentials : c))
+            : [...existing, credentials];
+
         return {
           ...prev,
           [provider]: {
             ...prev[provider],
-            savedCredentials: [...prev[provider].savedCredentials, credentials],
+            savedCredentials: updated,
           },
         };
       });
@@ -116,14 +123,14 @@ export default function CredentialsProvider({
           code,
           state_token,
         );
-        addCredentials(provider as string, credsMeta);
+        upsertCredentials(provider as string, credsMeta);
         return credsMeta;
       } catch (error) {
         onFailToast("complete OAuth authentication")(error);
         throw error;
       }
     },
-    [api, addCredentials, onFailToast],
+    [api, upsertCredentials, onFailToast],
   );
 
   /** Exchanges an MCP OAuth code for tokens and adds the result to the internal credentials store. */
@@ -145,14 +152,14 @@ export default function CredentialsProvider({
           username: response.data.username ?? undefined,
           host: response.data.host ?? undefined,
         };
-        addCredentials("mcp", credsMeta);
+        upsertCredentials("mcp", credsMeta);
         return credsMeta;
       } catch (error) {
         onFailToast("complete MCP OAuth authentication")(error);
         throw error;
       }
     },
-    [addCredentials, onFailToast],
+    [upsertCredentials, onFailToast],
   );
 
   /** Wraps `BackendAPI.createAPIKeyCredentials`, and adds the result to the internal credentials store. */
@@ -166,14 +173,14 @@ export default function CredentialsProvider({
           provider,
           ...credentials,
         });
-        addCredentials(provider, credsMeta);
+        upsertCredentials(provider, credsMeta);
         return credsMeta;
       } catch (error) {
         onFailToast("create API key credentials")(error);
         throw error;
       }
     },
-    [api, addCredentials, onFailToast],
+    [api, upsertCredentials, onFailToast],
   );
 
   /** Wraps `BackendAPI.createUserPasswordCredentials`, and adds the result to the internal credentials store. */
@@ -187,14 +194,14 @@ export default function CredentialsProvider({
           provider,
           ...credentials,
         });
-        addCredentials(provider, credsMeta);
+        upsertCredentials(provider, credsMeta);
         return credsMeta;
       } catch (error) {
         onFailToast("create user/password credentials")(error);
         throw error;
       }
     },
-    [api, addCredentials, onFailToast],
+    [api, upsertCredentials, onFailToast],
   );
 
   /** Wraps `BackendAPI.createHostScopedCredentials`, and adds the result to the internal credentials store. */
@@ -208,14 +215,14 @@ export default function CredentialsProvider({
           provider,
           ...credentials,
         });
-        addCredentials(provider, credsMeta);
+        upsertCredentials(provider, credsMeta);
         return credsMeta;
       } catch (error) {
         onFailToast("create host-scoped credentials")(error);
         throw error;
       }
     },
-    [api, addCredentials, onFailToast],
+    [api, upsertCredentials, onFailToast],
   );
 
   /** Wraps `BackendAPI.deleteCredentials`, and removes the credentials from the internal store. */

@@ -7,6 +7,7 @@ import {
 } from "@/providers/agent-credentials/credentials-provider";
 import {
   BlockIOCredentialsSubSchema,
+  CredentialsMetaResponse,
   CredentialsProviderName,
 } from "@/lib/autogpt-server-api";
 import { getHostFromUrl } from "@/lib/utils/url";
@@ -30,6 +31,7 @@ export type CredentialsData =
       supportsHostScoped: boolean;
       isLoading: false;
       discriminatorValue?: string;
+      upgradeableCredentials: CredentialsMetaResponse[];
     });
 
 export default function useCredentials(
@@ -83,45 +85,46 @@ export default function useCredentials(
 
   // No provider means maybe it's still loading
   if (!provider) {
-    // return {
-    //   provider: credsInputSchema.credentials_provider,
-    //   schema: credsInputSchema,
-    //   supportsApiKey,
-    //   supportsOAuth2,
-    //   isLoading: true,
-    // };
     return null;
   }
 
-  const savedCredentials = provider.savedCredentials.filter((c) => {
-    // First, check if the credential type is supported by this block
+  const savedCredentials: CredentialsMetaResponse[] = [];
+  const upgradeableCredentials: CredentialsMetaResponse[] = [];
+
+  for (const c of provider.savedCredentials) {
     const supportedTypes = credsInputSchema.credentials_types;
-    if (!supportedTypes.includes(c.type)) {
-      return false;
-    }
+    if (!supportedTypes.includes(c.type)) continue;
 
-    // Filter MCP OAuth2 credentials by server URL matching
+    // MCP OAuth2 credentials filter by server URL — not upgradeable
     if (c.type === "oauth2" && c.provider === "mcp") {
-      return discriminatorValue != null && c.host === discriminatorValue;
+      if (discriminatorValue != null && c.host === discriminatorValue) {
+        savedCredentials.push(c);
+      }
+      continue;
     }
 
-    // Filter by OAuth credentials that have sufficient scopes for this block
     if (c.type === "oauth2") {
       const requiredScopes = credsInputSchema.credentials_scopes;
-      return (
+      if (
         !requiredScopes ||
         new Set(c.scopes).isSupersetOf(new Set(requiredScopes))
-      );
+      ) {
+        savedCredentials.push(c);
+      } else {
+        upgradeableCredentials.push(c);
+      }
+      continue;
     }
 
-    // Filter host_scoped credentials by host matching
     if (c.type === "host_scoped") {
-      return discriminatorValue && getHostFromUrl(discriminatorValue) == c.host;
+      if (discriminatorValue && getHostFromUrl(discriminatorValue) == c.host) {
+        savedCredentials.push(c);
+      }
+      continue;
     }
 
-    // Include all other credential types that passed the type check
-    return true;
-  });
+    savedCredentials.push(c);
+  }
 
   return {
     ...provider,
@@ -132,6 +135,7 @@ export default function useCredentials(
     supportsUserPassword,
     supportsHostScoped,
     savedCredentials,
+    upgradeableCredentials,
     discriminatorValue,
     isLoading: false,
   };
