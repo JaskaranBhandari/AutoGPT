@@ -21,10 +21,7 @@ import logging
 import os
 from typing import Any, Callable
 
-from backend.copilot.context import (
-    get_sdk_cwd,
-    is_allowed_local_path,
-)
+from backend.copilot.context import get_sdk_cwd, is_allowed_local_path
 
 logger = logging.getLogger(__name__)
 
