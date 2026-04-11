@@ -39,32 +39,43 @@ def _mcp(text: str, *, error: bool = False) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "isError": error}
 
 
+_PARTIAL_TRUNCATION_MSG = (
+    "Your Write call was truncated (file_path missing but content "
+    "was present). The content was too large for a single tool call. "
+    "Write in chunks: use bash_exec with "
+    "'cat > file << \"EOF\"\\n...\\nEOF' for the first section, "
+    "'cat >> file << \"EOF\"\\n...\\nEOF' to append subsequent "
+    "sections, then reference the file with "
+    "@@agptfile:/path/to/file if needed."
+)
+
+_COMPLETE_TRUNCATION_MSG = (
+    "Your Write call had empty arguments — this means your previous "
+    "response was too long and the tool call was truncated by the API. "
+    "Break your work into smaller steps. For large content, write "
+    "section-by-section using bash_exec with "
+    "'cat > file << \"EOF\"\\n...\\nEOF' and "
+    "'cat >> file << \"EOF\"\\n...\\nEOF'."
+)
+
+
+def _check_truncation(file_path: str, content: str) -> dict[str, Any] | None:
+    """Return an error response if the args look truncated, else ``None``."""
+    if not file_path:
+        if content:
+            return _mcp(_PARTIAL_TRUNCATION_MSG, error=True)
+        return _mcp(_COMPLETE_TRUNCATION_MSG, error=True)
+    return None
+
+
 async def _handle_write_non_e2b(args: dict[str, Any]) -> dict[str, Any]:
     """Write content to a file in the SDK working directory (non-E2B mode)."""
     file_path: str = args.get("file_path", "")
     content: str = args.get("content", "")
 
-    if not file_path:
-        if content:
-            return _mcp(
-                "Your Write call was truncated (file_path missing but content "
-                "was present). The content was too large for a single tool call. "
-                "Write in chunks: use bash_exec with "
-                "'cat > file << \"EOF\"\\n...\\nEOF' for the first section, "
-                "'cat >> file << \"EOF\"\\n...\\nEOF' to append subsequent "
-                "sections, then reference the file with "
-                "@@agptfile:/path/to/file if needed.",
-                error=True,
-            )
-        return _mcp(
-            "Your Write call had empty arguments — this means your previous "
-            "response was too long and the tool call was truncated by the API. "
-            "Break your work into smaller steps. For large content, write "
-            "section-by-section using bash_exec with "
-            "'cat > file << \"EOF\"\\n...\\nEOF' and "
-            "'cat >> file << \"EOF\"\\n...\\nEOF'.",
-            error=True,
-        )
+    truncation_err = _check_truncation(file_path, content)
+    if truncation_err is not None:
+        return truncation_err
 
     sdk_cwd = get_sdk_cwd()
     if not sdk_cwd:
@@ -79,7 +90,7 @@ async def _handle_write_non_e2b(args: dict[str, Any]) -> dict[str, Any]:
     # Validate path stays within allowed directories
     if not is_allowed_local_path(resolved, sdk_cwd):
         return _mcp(
-            f"Path must be within the working directory ({sdk_cwd}): {file_path}",
+            f"Path must be within the working directory: {os.path.basename(file_path)}",
             error=True,
         )
 
@@ -115,27 +126,9 @@ async def _handle_write_e2b(args: dict[str, Any]) -> dict[str, Any]:
     file_path: str = args.get("file_path", "")
     content: str = args.get("content", "")
 
-    if not file_path:
-        if content:
-            return _mcp(
-                "Your Write call was truncated (file_path missing but content "
-                "was present). The content was too large for a single tool call. "
-                "Write in chunks: use bash_exec with "
-                "'cat > file << \"EOF\"\\n...\\nEOF' for the first section, "
-                "'cat >> file << \"EOF\"\\n...\\nEOF' to append subsequent "
-                "sections, then reference the file with "
-                "@@agptfile:/path/to/file if needed.",
-                error=True,
-            )
-        return _mcp(
-            "Your Write call had empty arguments — this means your previous "
-            "response was too long and the tool call was truncated by the API. "
-            "Break your work into smaller steps. For large content, write "
-            "section-by-section using bash_exec with "
-            "'cat > file << \"EOF\"\\n...\\nEOF' and "
-            "'cat >> file << \"EOF\"\\n...\\nEOF'.",
-            error=True,
-        )
+    truncation_err = _check_truncation(file_path, content)
+    if truncation_err is not None:
+        return truncation_err
 
     return await _handle_write_file(args)
 
