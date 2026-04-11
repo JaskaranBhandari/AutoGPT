@@ -10,7 +10,7 @@ import stripe
 from autogpt_libs.auth.jwt_utils import get_jwt_payload
 from prisma.enums import SubscriptionTier
 
-from .v1 import v1_router
+from .v1 import _validate_checkout_redirect_url, v1_router
 
 TEST_USER_ID = "3e53486c-cf57-477e-ba2a-cb02dc828e1a"
 TEST_FRONTEND_ORIGIN = "https://app.example.com"
@@ -45,6 +45,43 @@ def _configure_frontend_origin(mocker: pytest_mock.MockFixture) -> None:
     mocker.patch.object(
         v1_mod.settings.config, "frontend_base_url", TEST_FRONTEND_ORIGIN
     )
+
+
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        # Valid URLs matching the configured frontend origin
+        (f"{TEST_FRONTEND_ORIGIN}/success", True),
+        (f"{TEST_FRONTEND_ORIGIN}/cancel?ref=abc", True),
+        # Wrong origin
+        ("https://evil.example.org/phish", False),
+        ("https://evil.example.org", False),
+        # @ in URL (user:pass@host attack)
+        (f"https://attacker.example.com@{TEST_FRONTEND_ORIGIN}/ok", False),
+        # Backslash normalisation attack
+        (f"https:{TEST_FRONTEND_ORIGIN}\\@attacker.example.com/ok", False),
+        # javascript: scheme
+        ("javascript:alert(1)", False),
+        # Empty string
+        ("", False),
+        # Control character (U+0000) in URL
+        (f"{TEST_FRONTEND_ORIGIN}/ok\x00evil", False),
+        # Non-http scheme
+        (f"ftp://{TEST_FRONTEND_ORIGIN}/ok", False),
+    ],
+)
+def test_validate_checkout_redirect_url(
+    url: str,
+    expected: bool,
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """_validate_checkout_redirect_url rejects adversarial inputs."""
+    from backend.api.features import v1 as v1_mod
+
+    mocker.patch.object(
+        v1_mod.settings.config, "frontend_base_url", TEST_FRONTEND_ORIGIN
+    )
+    assert _validate_checkout_redirect_url(url) is expected
 
 
 def test_get_subscription_status_pro(

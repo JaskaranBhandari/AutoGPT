@@ -710,7 +710,20 @@ def _validate_checkout_redirect_url(url: str) -> bool:
 
     Prevents open-redirect: attackers must not be able to supply arbitrary
     success_url/cancel_url that Stripe will redirect users to after checkout.
+
+    Pre-parse rejection rules (applied before urlparse):
+    - URLs containing ``@`` can exploit ``user:pass@host`` authority tricks.
+    - Backslashes (``\\``) are normalised differently across parsers/browsers.
+    - Control characters (U+0000–U+001F) are not valid in URLs and may confuse
+      some URL-parsing implementations.
     """
+    # Reject characters that can confuse URL parsers before any parsing.
+    for bad_char in ("@", "\\"):
+        if bad_char in url:
+            return False
+    if any(ord(c) < 0x20 for c in url):
+        return False
+
     allowed = settings.config.frontend_base_url or settings.config.platform_base_url
     if not allowed:
         # No configured origin — refuse to validate rather than allow arbitrary URLs.
