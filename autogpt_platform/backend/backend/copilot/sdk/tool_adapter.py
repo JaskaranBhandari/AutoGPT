@@ -646,13 +646,19 @@ def create_copilot_mcp_server(*, use_e2b: bool = False):
         sdk_tools.append(decorated)
 
     # E2B file tools replace SDK built-in Read/Write/Edit/Glob/Grep.
+    _MUTATING_E2B_TOOLS = {"write_file", "edit_file"}
     if use_e2b:
         for name, desc, schema, handler in E2B_FILE_TOOLS:
+            ann = (
+                _MUTATING_ANNOTATION
+                if name in _MUTATING_E2B_TOOLS
+                else _PARALLEL_ANNOTATION
+            )
             decorated = tool(
                 name,
                 desc,
                 schema,
-                annotations=_PARALLEL_ANNOTATION,
+                annotations=ann,
             )(_make_truncating_wrapper(handler, name))
             sdk_tools.append(decorated)
 
@@ -819,12 +825,11 @@ def get_copilot_tool_names(*, use_e2b: bool = False) -> list[str]:
     if not use_e2b:
         return list(COPILOT_TOOL_NAMES)
 
-    # E2B_FILE_TOOL_NAMES already includes "read_file" \u2014 don't list
-    # READ_TOOL_NAME separately to avoid double registration.
+    # In E2B mode, Write/Edit are NOT registered (E2B uses write_file/edit_file
+    # from E2B_FILE_TOOLS instead), so don't include them here.
+    # _READ_TOOL_NAME is still needed for SDK tool-result reads.
     return [
         *[f"{MCP_TOOL_PREFIX}{name}" for name in TOOL_REGISTRY.keys()],
-        f"{MCP_TOOL_PREFIX}{WRITE_TOOL_NAME}",
-        f"{MCP_TOOL_PREFIX}{EDIT_TOOL_NAME}",
         f"{MCP_TOOL_PREFIX}{_READ_TOOL_NAME}",
         *[f"{MCP_TOOL_PREFIX}{name}" for name in E2B_FILE_TOOL_NAMES],
         *_SDK_BUILTIN_ALWAYS,
