@@ -1140,6 +1140,15 @@ class OrchestratorBlock(Block):
                 node_exec_future.set_exception(exec_err)
                 raise
 
+            if tool_node_stats is None:
+                resp = _create_tool_response(
+                    tool_call.id,
+                    "Tool execution returned no result",
+                    responses_api=responses_api,
+                )
+                resp["_is_error"] = True
+                return resp
+
             # Charge user credits AFTER successful tool execution. Tools
             # spawned by the orchestrator bypass the main execution queue
             # (where _charge_usage is called), so we must charge here to
