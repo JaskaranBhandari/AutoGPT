@@ -482,8 +482,8 @@ async def test_disable_experimental_betas_env_var_strips_headers():
     OpenRouter).
 
     This is the main regression guard: the env var is injected by
-    ``service.py`` into every CLI subprocess so newer SDK / CLI versions
-    work with OpenRouter without any proxy.
+    ``build_sdk_env()`` in ``env.py`` into every CLI subprocess so newer
+    SDK / CLI versions work with OpenRouter without any proxy.
     """
     returncode, _stdout, stderr, captured = await _run_reproduction(
         extra_env={"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"},

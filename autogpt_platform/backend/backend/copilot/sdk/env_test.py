@@ -123,6 +123,8 @@ class TestBuildSdkEnvOpenRouter:
         assert result["ANTHROPIC_AUTH_TOKEN"] == "sk-or-test-key"
         assert result["ANTHROPIC_API_KEY"] == ""
         assert "ANTHROPIC_CUSTOM_HEADERS" not in result
+        # OpenRouter compat: env var must always be present
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
 
     def test_strips_trailing_v1(self):
         """The /v1 suffix is stripped from the base URL."""

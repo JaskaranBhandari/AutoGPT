@@ -206,7 +206,7 @@ def test_sdk_exports_hook_event_type(hook_event: str):
 # features incompatible with OpenRouter (``tool_reference`` content
 # blocks, ``context-management-2025-06-27`` beta).  We neutralise these
 # at runtime by injecting ``CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1``
-# into the CLI subprocess env (see ``service.py``).
+# into the CLI subprocess env (see ``build_sdk_env()`` in ``env.py``).
 #
 # This test is the cheapest possible regression guard: it pins the
 # bundled CLI to a known-good version.  If anyone bumps
