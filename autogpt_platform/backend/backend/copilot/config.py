@@ -22,8 +22,10 @@ class ChatConfig(BaseSettings):
 
     # OpenAI API Configuration
     model: str = Field(
-        default="anthropic/claude-opus-4.6",
-        description="Default model for extended thinking mode",
+        default="anthropic/claude-sonnet-4",
+        description="Default model for extended thinking mode. "
+        "Changed from Opus ($15/$75 per M) to Sonnet ($3/$15 per M) — "
+        "5x cheaper. Override via CHAT_MODEL env var for Opus.",
     )
     fast_model: str = Field(
         default="anthropic/claude-sonnet-4",
