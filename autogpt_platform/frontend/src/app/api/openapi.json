@@ -4944,7 +4944,7 @@
     },
     "/api/llm/models": {
       "get": {
-        "tags": ["v2", "llm", "llm"],
+        "tags": ["v2", "llm"],
         "summary": "List Models",
         "description": "List all LLM models available to users.\n\nReturns models from the in-memory registry cache.\nUse enabled_only=true to filter to only enabled models (default).",
         "operationId": "getV2ListModels",
@@ -5223,7 +5223,7 @@
     },
     "/api/llm/providers": {
       "get": {
-        "tags": ["v2", "llm", "llm"],
+        "tags": ["v2", "llm"],
         "summary": "List Providers",
         "description": "List all LLM providers with their enabled models.\n\nGroups enabled models by provider from the in-memory registry.",
         "operationId": "getV2ListProviders",
