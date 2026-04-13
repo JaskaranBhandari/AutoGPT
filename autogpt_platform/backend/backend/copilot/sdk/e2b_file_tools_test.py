@@ -1189,6 +1189,12 @@ class TestConcurrentEditLocking:
         Each edit appends a unique line by replacing a sentinel. Without the
         per-path lock one update would silently overwrite the other; with the
         lock both replacements must be present in the final file.
+
+        The handler yields via ``asyncio.sleep(0)`` between the read and write
+        phases, allowing the event loop to schedule the second coroutine.  The
+        per-path lock ensures the second edit cannot proceed until the first
+        completes — without it, the test would fail because edit_b would read
+        a stale file and overwrite edit_a's change.
         """
         import asyncio as _asyncio
 

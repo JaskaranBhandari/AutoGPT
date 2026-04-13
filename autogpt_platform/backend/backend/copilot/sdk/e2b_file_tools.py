@@ -142,9 +142,9 @@ def _resolve_and_validate(
     on failure.
     """
     if not os.path.isabs(file_path):
-        resolved = os.path.normpath(os.path.join(sdk_cwd, file_path))
+        resolved = os.path.realpath(os.path.join(sdk_cwd, file_path))
     else:
-        resolved = os.path.normpath(file_path)
+        resolved = os.path.realpath(file_path)
 
     if not is_allowed_local_path(resolved, sdk_cwd):
         return None, _mcp(
@@ -546,6 +546,11 @@ async def _handle_edit_file(args: dict[str, Any]) -> dict[str, Any]:
             if replace_all
             else content.replace(old_string, new_string, 1)
         )
+
+        # Yield to the event loop between the read and write phases so other
+        # coroutines waiting on this lock can be scheduled.  The lock above
+        # ensures they cannot enter the critical section until we release it.
+        await asyncio.sleep(0)
 
         try:
             with open(resolved, "w", encoding="utf-8") as f:
