@@ -125,6 +125,7 @@ async def test_add_agent_to_library(mocker):
         isCreatedByUser=False,
         isDeleted=False,
         isArchived=False,
+        isHidden=False,
         createdAt=datetime.now(),
         updatedAt=datetime.now(),
         isFavorite=False,
