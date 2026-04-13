@@ -1,0 +1,93 @@
+"""Tests for the shared ThinkingStripper."""
+
+from backend.copilot.thinking_stripper import ThinkingStripper
+
+
+def test_basic_thinking_tag() -> None:
+    """<thinking>...</thinking> blocks are fully stripped."""
+    s = ThinkingStripper()
+    assert s.process("<thinking>internal reasoning here</thinking>Hello!") == "Hello!"
+
+
+def test_internal_reasoning_tag() -> None:
+    """<internal_reasoning>...</internal_reasoning> blocks are stripped."""
+    s = ThinkingStripper()
+    assert (
+        s.process("<internal_reasoning>step by step</internal_reasoning>Answer")
+        == "Answer"
+    )
+
+
+def test_split_across_chunks() -> None:
+    """Tags split across multiple chunks are handled correctly."""
+    s = ThinkingStripper()
+    out = s.process("Hello <thin")
+    out += s.process("king>secret</thinking> world")
+    assert out == "Hello  world"
+
+
+def test_plain_text_preserved() -> None:
+    """Plain text with the word 'thinking' is not stripped."""
+    s = ThinkingStripper()
+    assert (
+        s.process("I am thinking about this problem")
+        == "I am thinking about this problem"
+    )
+
+
+def test_multiple_blocks() -> None:
+    """Multiple reasoning blocks in one stream are all stripped."""
+    s = ThinkingStripper()
+    result = s.process(
+        "A<thinking>x</thinking>B<internal_reasoning>y</internal_reasoning>C"
+    )
+    assert result == "ABC"
+
+
+def test_flush_discards_unclosed() -> None:
+    """Unclosed reasoning block is discarded on flush."""
+    s = ThinkingStripper()
+    s.process("Start<thinking>never closed")
+    flushed = s.flush()
+    assert "never closed" not in flushed
+
+
+def test_empty_block() -> None:
+    """Empty reasoning blocks are handled gracefully."""
+    s = ThinkingStripper()
+    assert s.process("Before<thinking></thinking>After") == "BeforeAfter"
+
+
+def test_flush_emits_remaining_plain_text() -> None:
+    """flush() returns any plain text still in the buffer."""
+    s = ThinkingStripper()
+    # The trailing '<' could be a partial tag, so process buffers it.
+    out = s.process("Hello")
+    flushed = s.flush()
+    assert out + flushed == "Hello"
+
+
+def test_internal_reasoning_split_open_tag() -> None:
+    """<internal_reasoning> split across three chunks."""
+    s = ThinkingStripper()
+    out = s.process("OK <inter")
+    out += s.process("nal_reaso")
+    out += s.process("ning>secret stuff</internal_reasoning> visible")
+    out += s.flush()
+    assert out == "OK  visible"
+
+
+def test_no_tags_passthrough() -> None:
+    """Text without any tags passes through unchanged."""
+    s = ThinkingStripper()
+    out = s.process("Hello world, this is fine.")
+    out += s.flush()
+    assert out == "Hello world, this is fine."
+
+
+def test_reasoning_at_end_of_stream() -> None:
+    """Reasoning block at end of stream with no trailing text."""
+    s = ThinkingStripper()
+    out = s.process("Answer<internal_reasoning>my thoughts</internal_reasoning>")
+    out += s.flush()
+    assert out == "Answer"

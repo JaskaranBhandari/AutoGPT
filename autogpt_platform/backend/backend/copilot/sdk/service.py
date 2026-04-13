@@ -12,7 +12,7 @@ import sys
 import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 if TYPE_CHECKING:
@@ -95,6 +95,7 @@ from ..service import (
 from ..token_tracking import persist_and_record_usage
 from ..tools.e2b_sandbox import get_or_create_sandbox, pause_sandbox_direct
 from ..tools.sandbox import WORKSPACE_PREFIX, make_session_path
+from ..thinking_stripper import ThinkingStripper
 from ..tracking import track_user_message
 from .compaction import CompactionTracker, filter_compaction_messages
 from .env import build_sdk_env  # noqa: F401 — re-export for backward compat
@@ -1130,6 +1131,9 @@ class _StreamAccumulator:
     has_appended_assistant: bool = False
     has_tool_results: bool = False
     stream_completed: bool = False
+    thinking_stripper: ThinkingStripper = dataclass_field(
+        default_factory=ThinkingStripper,
+    )
 
 
 def _dispatch_response(
@@ -1186,7 +1190,15 @@ def _dispatch_response(
         )
 
     if isinstance(response, StreamTextDelta):
-        delta = response.delta or ""
+        raw_delta = response.delta or ""
+        # Strip <internal_reasoning> / <thinking> tags that non-extended-
+        # thinking models (e.g. Sonnet) may emit as visible text.
+        delta = acc.thinking_stripper.process(raw_delta)
+        if not delta:
+            # Stripper is buffering a potential tag — suppress this event.
+            return None
+        # Replace the delta with the stripped version for the SSE client.
+        response = StreamTextDelta(id=response.id, delta=delta)
         if acc.has_tool_results and acc.has_appended_assistant:
             acc.assistant_response = ChatMessage(role="assistant", content=delta)
             acc.accumulated_tool_calls = []
@@ -1793,6 +1805,12 @@ async def _run_stream_attempt(
                 break
     finally:
         await _safe_close_sdk_client(sdk_client, ctx.log_prefix)
+
+    # --- Flush any text buffered by the thinking stripper ---
+    tail = acc.thinking_stripper.flush()
+    if tail:
+        acc.assistant_response.content = (acc.assistant_response.content or "") + tail
+        yield StreamTextDelta(id="", delta=tail)
 
     # --- Post-stream processing (only on success) ---
     if state.adapter.has_unresolved_tool_calls:
