@@ -355,6 +355,12 @@ export function useCopilotPage() {
   }
 
   function handleSelectSession(id: string) {
+    // Record current session's mode before switching away so it's
+    // preserved when the user switches back — covers sessions created
+    // before the per-session mode fix was deployed.
+    if (sessionId) {
+      recordSessionMode(sessionId);
+    }
     setSessionId(id);
     restoreSessionMode(id);
     if (isMobile) setDrawerOpen(false);
