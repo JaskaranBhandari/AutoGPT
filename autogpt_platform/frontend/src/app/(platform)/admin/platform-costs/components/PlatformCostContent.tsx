@@ -215,52 +215,100 @@ export function PlatformCostContent({ searchParams }: Props) {
       ) : (
         <>
           {dashboard && (
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-              <SummaryCard
-                label="Known Cost"
-                value={formatMicrodollars(dashboard.total_cost_microdollars)}
-                subtitle="From providers that report USD cost"
-              />
-              <SummaryCard
-                label="Estimated Total"
-                value={formatMicrodollars(totalEstimatedCost)}
-                subtitle="Including per-run cost estimates"
-              />
-              <SummaryCard
-                label="Total Requests"
-                value={dashboard.total_requests.toLocaleString()}
-              />
-              <SummaryCard
-                label="Active Users"
-                value={dashboard.total_users.toLocaleString()}
-              />
-              <SummaryCard
-                label="Avg Cost / Request"
-                value={formatMicrodollars(
-                  dashboard.avg_cost_microdollars_per_request ?? 0,
-                )}
-                subtitle="Known cost divided by total requests"
-              />
-              <SummaryCard
-                label="Avg Input Tokens"
-                value={Math.round(
-                  dashboard.avg_input_tokens_per_request ?? 0,
-                ).toLocaleString()}
-                subtitle="Prompt tokens per request (context size)"
-              />
-              <SummaryCard
-                label="Avg Output Tokens"
-                value={Math.round(
-                  dashboard.avg_output_tokens_per_request ?? 0,
-                ).toLocaleString()}
-                subtitle="Completion tokens per request (response length)"
-              />
-              <SummaryCard
-                label="Total Tokens"
-                value={`${formatTokens(dashboard.total_input_tokens ?? 0)} in / ${formatTokens(dashboard.total_output_tokens ?? 0)} out`}
-                subtitle="Prompt vs completion token split"
-              />
-            </div>
+            <>
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+                <SummaryCard
+                  label="Known Cost"
+                  value={formatMicrodollars(dashboard.total_cost_microdollars)}
+                  subtitle="From providers that report USD cost"
+                />
+                <SummaryCard
+                  label="Estimated Total"
+                  value={formatMicrodollars(totalEstimatedCost)}
+                  subtitle="Including per-run cost estimates"
+                />
+                <SummaryCard
+                  label="Total Requests"
+                  value={dashboard.total_requests.toLocaleString()}
+                />
+                <SummaryCard
+                  label="Active Users"
+                  value={dashboard.total_users.toLocaleString()}
+                />
+                <SummaryCard
+                  label="Avg Cost / Request"
+                  value={formatMicrodollars(
+                    dashboard.avg_cost_microdollars_per_request ?? 0,
+                  )}
+                  subtitle="Known cost divided by total requests"
+                />
+                <SummaryCard
+                  label="Avg Input Tokens"
+                  value={Math.round(
+                    dashboard.avg_input_tokens_per_request ?? 0,
+                  ).toLocaleString()}
+                  subtitle="Prompt tokens per request (context size)"
+                />
+                <SummaryCard
+                  label="Avg Output Tokens"
+                  value={Math.round(
+                    dashboard.avg_output_tokens_per_request ?? 0,
+                  ).toLocaleString()}
+                  subtitle="Completion tokens per request (response length)"
+                />
+                <SummaryCard
+                  label="Total Tokens"
+                  value={`${formatTokens(dashboard.total_input_tokens ?? 0)} in / ${formatTokens(dashboard.total_output_tokens ?? 0)} out`}
+                  subtitle="Prompt vs completion token split"
+                />
+                <SummaryCard
+                  label="P50 Cost / Request"
+                  value={formatMicrodollars(
+                    dashboard.cost_p50_microdollars ?? 0,
+                  )}
+                  subtitle="Median cost per request"
+                />
+                <SummaryCard
+                  label="P95 Cost / Request"
+                  value={formatMicrodollars(
+                    dashboard.cost_p95_microdollars ?? 0,
+                  )}
+                  subtitle="95th percentile cost"
+                />
+                <SummaryCard
+                  label="P99 Cost / Request"
+                  value={formatMicrodollars(
+                    dashboard.cost_p99_microdollars ?? 0,
+                  )}
+                  subtitle="99th percentile cost"
+                />
+              </div>
+
+              {dashboard.cost_buckets && dashboard.cost_buckets.length > 0 && (
+                <div className="rounded-lg border p-4">
+                  <h3 className="mb-3 text-sm font-medium">
+                    Cost Distribution by Bucket
+                  </h3>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-6">
+                    {dashboard.cost_buckets.map(
+                      (b: { bucket: string; count: number }) => (
+                        <div
+                          key={b.bucket}
+                          className="flex flex-col items-center rounded border p-2 text-center"
+                        >
+                          <span className="text-xs text-muted-foreground">
+                            {b.bucket}
+                          </span>
+                          <span className="text-lg font-semibold">
+                            {b.count.toLocaleString()}
+                          </span>
+                        </div>
+                      ),
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           <div

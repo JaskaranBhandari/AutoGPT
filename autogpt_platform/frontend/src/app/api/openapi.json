@@ -12146,7 +12146,12 @@
           "total_output_tokens": { "type": "integer", "title": "Total Output Tokens", "default": 0 },
           "avg_input_tokens_per_request": { "type": "number", "title": "Avg Input Tokens Per Request", "default": 0.0 },
           "avg_output_tokens_per_request": { "type": "number", "title": "Avg Output Tokens Per Request", "default": 0.0 },
-          "avg_cost_microdollars_per_request": { "type": "number", "title": "Avg Cost Microdollars Per Request", "default": 0.0 }
+          "avg_cost_microdollars_per_request": { "type": "number", "title": "Avg Cost Microdollars Per Request", "default": 0.0 },
+          "cost_p50_microdollars": { "type": "number", "title": "Cost P50 Microdollars", "default": 0.0 },
+          "cost_p75_microdollars": { "type": "number", "title": "Cost P75 Microdollars", "default": 0.0 },
+          "cost_p95_microdollars": { "type": "number", "title": "Cost P95 Microdollars", "default": 0.0 },
+          "cost_p99_microdollars": { "type": "number", "title": "Cost P99 Microdollars", "default": 0.0 },
+          "cost_buckets": { "type": "array", "items": { "type": "object" }, "title": "Cost Buckets", "default": [] }
         },
         "type": "object",
         "required": [

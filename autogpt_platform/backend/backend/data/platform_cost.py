@@ -8,6 +8,7 @@ from prisma.models import User as PrismaUser
 from prisma.types import PlatformCostLogCreateInput, PlatformCostLogWhereInput
 from pydantic import BaseModel
 
+from backend.data.db import query_raw_with_schema
 from backend.util.cache import cached
 from backend.util.json import SafeJson
 
@@ -172,6 +173,11 @@ class PlatformCostDashboard(BaseModel):
     avg_input_tokens_per_request: float = 0.0
     avg_output_tokens_per_request: float = 0.0
     avg_cost_microdollars_per_request: float = 0.0
+    cost_p50_microdollars: float = 0.0
+    cost_p75_microdollars: float = 0.0
+    cost_p95_microdollars: float = 0.0
+    cost_p99_microdollars: float = 0.0
+    cost_buckets: list[dict] = []
 
 
 def _si(row: dict, field: str) -> int:
@@ -269,43 +275,88 @@ async def get_platform_cost_dashboard(
         "trackingAmount": True,
     }
 
-    # Run all four aggregation queries in parallel.
-    by_provider_groups, by_user_groups, total_user_groups, total_agg_groups = (
-        await asyncio.gather(
-            # (provider, trackingType, model) aggregation — no ORDER BY in ORM;
-            # sort by total cost descending in Python after fetch.
-            PrismaLog.prisma().group_by(
-                by=["provider", "trackingType", "model"],
-                where=where,
-                sum=sum_fields,
-                count=True,
-            ),
-            # userId aggregation — emails fetched separately below.
-            PrismaLog.prisma().group_by(
-                by=["userId"],
-                where=where,
-                sum=sum_fields,
-                count=True,
-            ),
-            # Distinct user count: group by userId, count groups.
-            PrismaLog.prisma().group_by(
-                by=["userId"],
-                where=where,
-                count=True,
-            ),
-            # Total aggregate: group by (provider, trackingType) so we can
-            # distinguish cost-bearing rows for per-request averages.
-            PrismaLog.prisma().group_by(
-                by=["provider", "trackingType"],
-                where=where,
-                sum={
-                    "costMicrodollars": True,
-                    "inputTokens": True,
-                    "outputTokens": True,
-                },
-                count=True,
-            ),
-        )
+    # Run all six aggregation queries in parallel.
+    (
+        by_provider_groups,
+        by_user_groups,
+        total_user_groups,
+        total_agg_groups,
+        percentile_rows,
+        bucket_rows,
+    ) = await asyncio.gather(
+        # (provider, trackingType, model) aggregation — no ORDER BY in ORM;
+        # sort by total cost descending in Python after fetch.
+        PrismaLog.prisma().group_by(
+            by=["provider", "trackingType", "model"],
+            where=where,
+            sum=sum_fields,
+            count=True,
+        ),
+        # userId aggregation — emails fetched separately below.
+        PrismaLog.prisma().group_by(
+            by=["userId"],
+            where=where,
+            sum=sum_fields,
+            count=True,
+        ),
+        # Distinct user count: group by userId, count groups.
+        PrismaLog.prisma().group_by(
+            by=["userId"],
+            where=where,
+            count=True,
+        ),
+        # Total aggregate: group by (provider, trackingType) so we can
+        # distinguish cost-bearing rows for per-request averages.
+        PrismaLog.prisma().group_by(
+            by=["provider", "trackingType"],
+            where=where,
+            sum={
+                "costMicrodollars": True,
+                "inputTokens": True,
+                "outputTokens": True,
+            },
+            count=True,
+        ),
+        # Percentile distribution of cost per request.
+        query_raw_with_schema(
+            "SELECT"
+            "  percentile_cont(0.5) WITHIN GROUP"
+            '    (ORDER BY "costMicrodollars") as p50,'
+            "  percentile_cont(0.75) WITHIN GROUP"
+            '    (ORDER BY "costMicrodollars") as p75,'
+            "  percentile_cont(0.95) WITHIN GROUP"
+            '    (ORDER BY "costMicrodollars") as p95,'
+            "  percentile_cont(0.99) WITHIN GROUP"
+            '    (ORDER BY "costMicrodollars") as p99'
+            ' FROM {schema_prefix}"PlatformCostLog"'
+            " WHERE \"trackingType\" = 'cost_usd'"
+            ' AND "createdAt" >= $1',
+            start,
+        ),
+        # Histogram buckets for cost distribution.
+        query_raw_with_schema(
+            "SELECT"
+            "  CASE"
+            '    WHEN "costMicrodollars" < 500000'
+            "      THEN '$0-0.50'"
+            '    WHEN "costMicrodollars" < 1000000'
+            "      THEN '$0.50-1'"
+            '    WHEN "costMicrodollars" < 2000000'
+            "      THEN '$1-2'"
+            '    WHEN "costMicrodollars" < 5000000'
+            "      THEN '$2-5'"
+            '    WHEN "costMicrodollars" < 10000000'
+            "      THEN '$5-10'"
+            "    ELSE '$10+'"
+            "  END as bucket,"
+            "  COUNT(*) as count"
+            ' FROM {schema_prefix}"PlatformCostLog"'
+            " WHERE \"trackingType\" = 'cost_usd'"
+            ' AND "createdAt" >= $1'
+            " GROUP BY bucket"
+            ' ORDER BY MIN("costMicrodollars")',
+            start,
+        ),
     )
 
     # Sort by_provider by total cost descending and cap at MAX_PROVIDER_ROWS.
@@ -333,6 +384,18 @@ async def get_platform_cost_dashboard(
     total_requests = sum(_ca(r) for r in total_agg_groups)
     total_input_tokens = sum(_si(r, "inputTokens") for r in total_agg_groups)
     total_output_tokens = sum(_si(r, "outputTokens") for r in total_agg_groups)
+
+    # Extract percentile values from the raw query result.
+    pctl = percentile_rows[0] if percentile_rows else {}
+    cost_p50 = float(pctl.get("p50") or 0)
+    cost_p75 = float(pctl.get("p75") or 0)
+    cost_p95 = float(pctl.get("p95") or 0)
+    cost_p99 = float(pctl.get("p99") or 0)
+
+    # Build cost bucket list.
+    cost_buckets = [
+        {"bucket": r["bucket"], "count": int(r["count"])} for r in bucket_rows
+    ]
 
     # Cost-bearing request count: only rows where trackingType == "cost_usd".
     cost_bearing_requests = sum(
@@ -385,6 +448,11 @@ async def get_platform_cost_dashboard(
         avg_cost_microdollars_per_request=(
             total_cost / cost_bearing_requests if cost_bearing_requests > 0 else 0.0
         ),
+        cost_p50_microdollars=cost_p50,
+        cost_p75_microdollars=cost_p75,
+        cost_p95_microdollars=cost_p95,
+        cost_p99_microdollars=cost_p99,
+        cost_buckets=cost_buckets,
     )
 
 
