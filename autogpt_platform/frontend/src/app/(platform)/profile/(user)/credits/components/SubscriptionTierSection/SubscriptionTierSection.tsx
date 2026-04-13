@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/molecules/Dialog/Dialog";
+import { Skeleton } from "@/components/atoms/Skeleton/Skeleton";
 import { useSubscriptionTierSection } from "./useSubscriptionTierSection";
 
 type TierInfo = {
@@ -54,7 +55,18 @@ export function SubscriptionTierSection() {
     null,
   );
 
-  if (isLoading) return null;
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-6 w-48" />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Skeleton className="h-40 rounded-lg" />
+          <Skeleton className="h-40 rounded-lg" />
+          <Skeleton className="h-40 rounded-lg" />
+        </div>
+      </div>
+    );
+  }
 
   if (error) {
     return (
