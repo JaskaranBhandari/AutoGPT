@@ -23,6 +23,7 @@ describe("useCopilotUIStore", () => {
       isSoundEnabled: true,
       showNotificationDialog: false,
       copilotMode: "extended_thinking",
+      sessionModes: new Map(),
     });
   });
 
@@ -176,17 +177,64 @@ describe("useCopilotUIStore", () => {
     });
   });
 
+  describe("sessionModes", () => {
+    it("records the current mode for a session", () => {
+      useCopilotUIStore.getState().setCopilotMode("fast");
+      useCopilotUIStore.getState().recordSessionMode("session-1");
+      expect(useCopilotUIStore.getState().sessionModes.get("session-1")).toBe(
+        "fast",
+      );
+    });
+
+    it("restores mode when switching sessions", () => {
+      // Create session in fast mode
+      useCopilotUIStore.getState().setCopilotMode("fast");
+      useCopilotUIStore.getState().recordSessionMode("session-1");
+
+      // Create session in extended_thinking mode
+      useCopilotUIStore.getState().setCopilotMode("extended_thinking");
+      useCopilotUIStore.getState().recordSessionMode("session-2");
+
+      // Switch back to session-1 should restore fast mode
+      useCopilotUIStore.getState().restoreSessionMode("session-1");
+      expect(useCopilotUIStore.getState().copilotMode).toBe("fast");
+
+      // Switch to session-2 should restore extended_thinking mode
+      useCopilotUIStore.getState().restoreSessionMode("session-2");
+      expect(useCopilotUIStore.getState().copilotMode).toBe(
+        "extended_thinking",
+      );
+    });
+
+    it("keeps current mode when session has no recorded mode", () => {
+      useCopilotUIStore.getState().setCopilotMode("fast");
+      useCopilotUIStore.getState().restoreSessionMode("unknown-session");
+      expect(useCopilotUIStore.getState().copilotMode).toBe("fast");
+    });
+
+    it("persists session modes to localStorage", () => {
+      useCopilotUIStore.getState().setCopilotMode("fast");
+      useCopilotUIStore.getState().recordSessionMode("session-1");
+      const raw = window.localStorage.getItem("copilot-session-modes");
+      expect(raw).not.toBeNull();
+      const parsed = JSON.parse(raw!) as [string, string][];
+      expect(parsed).toEqual([["session-1", "fast"]]);
+    });
+  });
+
   describe("clearCopilotLocalData", () => {
     it("resets state and clears localStorage keys", () => {
       useCopilotUIStore.getState().setCopilotMode("fast");
       useCopilotUIStore.getState().setNotificationsEnabled(true);
       useCopilotUIStore.getState().toggleSound();
       useCopilotUIStore.getState().addCompletedSession("s1");
+      useCopilotUIStore.getState().recordSessionMode("s1");
 
       useCopilotUIStore.getState().clearCopilotLocalData();
 
       const state = useCopilotUIStore.getState();
       expect(state.copilotMode).toBe("extended_thinking");
+      expect(state.sessionModes.size).toBe(0);
       expect(state.isNotificationsEnabled).toBe(false);
       expect(state.isSoundEnabled).toBe(true);
       expect(state.completedSessionIDs.size).toBe(0);

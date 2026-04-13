@@ -44,6 +44,8 @@ export function useCopilotPage() {
     setDrawerOpen,
     copilotMode,
     isDryRun,
+    recordSessionMode,
+    restoreSessionMode,
   } = useCopilotUIStore();
 
   const {
@@ -133,6 +135,8 @@ export function useCopilotPage() {
   // --- Send pending message after session creation ---
   useEffect(() => {
     if (!sessionId || pendingMessage === null) return;
+    // Record the mode that was active when this session was created
+    recordSessionMode(sessionId);
     const msg = pendingMessage;
     const files = pendingFilesRef.current;
     const prebuiltParts = pendingFilePartsRef.current;
@@ -348,6 +352,7 @@ export function useCopilotPage() {
 
   function handleSelectSession(id: string) {
     setSessionId(id);
+    restoreSessionMode(id);
     if (isMobile) setDrawerOpen(false);
   }
 
