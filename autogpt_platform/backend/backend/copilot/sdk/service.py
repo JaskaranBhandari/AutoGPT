@@ -90,6 +90,7 @@ from ..service import (
     _is_langfuse_configured,
     _update_title_async,
     inject_user_context,
+    strip_user_context_tags,
 )
 from ..token_tracking import persist_and_record_usage
 from ..tools.e2b_sandbox import get_or_create_sandbox, pause_sandbox_direct
@@ -1910,6 +1911,11 @@ async def stream_chat_completion_sdk(
         )
         session.messages.pop()
 
+    # Strip any user-injected <user_context> tags on every turn.
+    # Only the server-injected prefix on the first message is trusted.
+    if message:
+        message = strip_user_context_tags(message)
+
     if maybe_append_user_message(session, message, is_user_message):
         if is_user_message:
             track_user_message(
@@ -2283,16 +2289,15 @@ async def stream_chat_completion_sdk(
             )
             return
 
+        # Strip any user-injected <user_context> tags from current_message.
+        # On --resume, current_message may come from session history which was
+        # already sanitized on the original turn; strip again as defence-in-depth.
+        current_message = strip_user_context_tags(current_message)
+
         # On the first turn inject user context into the message before building
         # the query so that _build_query_message sees the full prefixed content.
         # The system prompt is now static (same for all users) so the LLM can
         # cache it across sessions.
-        #
-        # inject_user_context also strips any user-supplied <user_context>
-        # blocks from `current_message` as a defence-in-depth measure — so
-        # even new users (understanding=None) are called through this path
-        # to sanitise the message. It mutates session.messages + DB in place
-        # so later --resume replays see the cleaned content.
         if not has_history:
             prefixed_message = await inject_user_context(
                 understanding, current_message, session_id, session.messages
