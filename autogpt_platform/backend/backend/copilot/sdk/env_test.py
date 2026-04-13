@@ -44,6 +44,7 @@ class TestBuildSdkEnvSubscription:
         assert result["ANTHROPIC_API_KEY"] == ""
         assert result["ANTHROPIC_AUTH_TOKEN"] == ""
         assert result["ANTHROPIC_BASE_URL"] == ""
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
         mock_validate.assert_called_once()
 
     @patch(
@@ -78,6 +79,7 @@ class TestBuildSdkEnvDirectAnthropic:
         assert "ANTHROPIC_API_KEY" not in result
         assert "ANTHROPIC_AUTH_TOKEN" not in result
         assert "ANTHROPIC_BASE_URL" not in result
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
 
     def test_no_anthropic_key_overrides_when_openrouter_flag_true_but_no_key(self):
         """OpenRouter flag is True but no api_key => openrouter_active is False."""
@@ -93,6 +95,7 @@ class TestBuildSdkEnvDirectAnthropic:
         assert "ANTHROPIC_API_KEY" not in result
         assert "ANTHROPIC_AUTH_TOKEN" not in result
         assert "ANTHROPIC_BASE_URL" not in result
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +126,8 @@ class TestBuildSdkEnvOpenRouter:
         assert result["ANTHROPIC_AUTH_TOKEN"] == "sk-or-test-key"
         assert result["ANTHROPIC_API_KEY"] == ""
         assert "ANTHROPIC_CUSTOM_HEADERS" not in result
+        # OpenRouter compat: env var must always be present
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
 
     def test_strips_trailing_v1(self):
         """The /v1 suffix is stripped from the base URL."""
@@ -133,6 +138,7 @@ class TestBuildSdkEnvOpenRouter:
             result = build_sdk_env()
 
         assert result["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
 
     def test_strips_trailing_v1_and_slash(self):
         """Trailing slash before /v1 strip is handled."""
@@ -144,6 +150,7 @@ class TestBuildSdkEnvOpenRouter:
 
         # rstrip("/") first, then remove /v1
         assert result["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
 
     def test_no_v1_suffix_left_alone(self):
         """A base URL without /v1 is used as-is."""
@@ -154,6 +161,7 @@ class TestBuildSdkEnvOpenRouter:
             result = build_sdk_env()
 
         assert result["ANTHROPIC_BASE_URL"] == "https://custom-proxy.example.com"
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
 
     def test_session_id_header(self):
         cfg = self._openrouter_config()

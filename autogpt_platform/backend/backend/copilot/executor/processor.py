@@ -174,13 +174,23 @@ class CoPilotProcessor:
         logger.info(f"[CoPilotExecutor] Worker {self.tid} started")
 
     def _prewarm_cli(self) -> None:
-        """Run the bundled CLI binary once to warm OS page caches."""
-        try:
-            from claude_agent_sdk._internal.transport.subprocess_cli import (
-                SubprocessCLITransport,
-            )
+        """Run the Claude Code CLI binary once to warm OS page caches.
 
-            cli_path = SubprocessCLITransport._find_bundled_cli(None)  # type: ignore[arg-type]
+        Honours the ``claude_agent_cli_path`` config override (which lets
+        us run a pinned CLI version independent of the bundled one in the
+        installed ``claude-agent-sdk`` wheel — see
+        ``ChatConfig.claude_agent_cli_path`` for the rationale). Falls
+        back to the bundled binary when no override is set.
+        """
+        try:
+            cfg = ChatConfig()
+            cli_path: str | None = cfg.claude_agent_cli_path
+            if not cli_path:
+                from claude_agent_sdk._internal.transport.subprocess_cli import (
+                    SubprocessCLITransport,
+                )
+
+                cli_path = SubprocessCLITransport._find_bundled_cli(None)  # type: ignore[arg-type]
             if cli_path:
                 result = subprocess.run(
                     [cli_path, "-v"],

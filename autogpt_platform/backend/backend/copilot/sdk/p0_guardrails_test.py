@@ -203,11 +203,15 @@ class TestConfigDefaults:
 
     def test_max_turns_default(self):
         cfg = _make_config()
-        assert cfg.claude_agent_max_turns == 1000
+        assert cfg.claude_agent_max_turns == 50
 
     def test_max_budget_usd_default(self):
         cfg = _make_config()
-        assert cfg.claude_agent_max_budget_usd == 100.0
+        assert cfg.claude_agent_max_budget_usd == 5.0
+
+    def test_max_thinking_tokens_default(self):
+        cfg = _make_config()
+        assert cfg.claude_agent_max_thinking_tokens == 8192
 
     def test_max_transient_retries_default(self):
         cfg = _make_config()

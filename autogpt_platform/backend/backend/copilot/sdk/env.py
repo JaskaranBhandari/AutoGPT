@@ -96,5 +96,8 @@ def build_sdk_env(
     env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
     env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
     env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+    # Strip Anthropic-specific beta headers (e.g. context-management-2025-06-27)
+    # that OpenRouter rejects.  Safe for all modes — direct Anthropic ignores it.
+    env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
 
     return env
