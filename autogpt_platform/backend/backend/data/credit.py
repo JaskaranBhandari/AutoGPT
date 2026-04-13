@@ -1490,17 +1490,19 @@ async def sync_subscription_from_stripe(stripe_subscription: dict) -> None:
         # customer; if they do, keep the user's current tier (the other sub's
         # own event will/has already set the correct tier).
         try:
-            other_subs_active = await run_in_threadpool(
-                stripe.Subscription.list,
-                customer=customer_id,
-                status="active",
-                limit=10,
-            )
-            other_subs_trialing = await run_in_threadpool(
-                stripe.Subscription.list,
-                customer=customer_id,
-                status="trialing",
-                limit=10,
+            other_subs_active, other_subs_trialing = await asyncio.gather(
+                run_in_threadpool(
+                    stripe.Subscription.list,
+                    customer=customer_id,
+                    status="active",
+                    limit=10,
+                ),
+                run_in_threadpool(
+                    stripe.Subscription.list,
+                    customer=customer_id,
+                    status="trialing",
+                    limit=10,
+                ),
             )
         except stripe.StripeError:
             logger.warning(

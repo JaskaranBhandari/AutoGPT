@@ -307,4 +307,17 @@ describe("SubscriptionTierSection", () => {
     // URL param must be stripped so a page refresh doesn't re-trigger the toast
     expect(mockRouterReplace).toHaveBeenCalledWith("/profile/credits");
   });
+
+  it("clears URL param but shows no toast when ?subscription=cancelled is present", async () => {
+    mockSearchParams.set("subscription", "cancelled");
+    setupMocks();
+    render(<SubscriptionTierSection />);
+
+    // The cancelled param must be stripped from the URL (same hygiene as success)
+    await waitFor(() => {
+      expect(mockRouterReplace).toHaveBeenCalledWith("/profile/credits");
+    });
+    // No toast should fire — the user simply abandoned checkout
+    expect(mockToast).not.toHaveBeenCalled();
+  });
 });

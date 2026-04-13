@@ -43,9 +43,14 @@ export function useSubscriptionTierSection() {
         description:
           "Your plan has been updated. It may take a moment to reflect.",
       });
-      // Strip ?subscription=success from the URL so a page refresh does not
-      // re-trigger the toast, and so a second checkout in the same session
-      // correctly fires the toast again.
+    }
+    // Strip ?subscription=success|cancelled from the URL so a page refresh
+    // does not re-trigger side-effects, and so a second checkout in the same
+    // session correctly fires the toast again.
+    if (
+      subscriptionStatus === "success" ||
+      subscriptionStatus === "cancelled"
+    ) {
       router.replace(pathname);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch and toast
