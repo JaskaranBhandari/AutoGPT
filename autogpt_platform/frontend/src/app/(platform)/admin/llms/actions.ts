@@ -50,8 +50,8 @@ async function adminFetch(
 
   if (!response.ok) {
     const errorData = data as Record<string, string> | null;
-  const errorMessage =
-    errorData?.detail || errorData?.message || `HTTP ${response.status}`;
+    const errorMessage =
+      errorData?.detail || errorData?.message || `HTTP ${response.status}`;
     throw new Error(errorMessage);
   }
 
@@ -243,8 +243,7 @@ export async function updateLlmModelAction(formData: FormData) {
   if (displayName !== null && String(displayName).trim())
     payload.display_name = String(displayName).trim();
   const description = formData.get("description");
-  if (description !== null)
-    payload.description = String(description);
+  if (description !== null) payload.description = String(description);
   const creatorId = formData.get("creator_id");
   if (creatorId !== null && String(creatorId).trim())
     payload.creator_id = String(creatorId).trim();
