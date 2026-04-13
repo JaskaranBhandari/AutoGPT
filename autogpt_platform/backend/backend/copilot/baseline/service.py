@@ -141,8 +141,12 @@ def _estimate_cost_from_tokens(
     * Cache reads are billed at a fraction of the normal input rate
       (Anthropic: 10 %, OpenAI: 50 %).  The regular (non-cached) portion is
       billed at full price.
-    * Cache writes (creation) are already included in ``prompt_tokens`` at the
-      full input rate — no adjustment is needed.
+    * Cache writes (creation) appear in
+      ``prompt_tokens_details.cache_creation_input_tokens`` and are billed at
+      a premium by some providers (e.g. Anthropic charges 1.25× the input
+      rate).  This estimator does **not** account for them — it intentionally
+      ignores cache-creation tokens as an acceptable approximation for a
+      fallback cost estimate.
 
     Returns None if the model is not in the pricing table.
     """
