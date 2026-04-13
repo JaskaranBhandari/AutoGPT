@@ -183,8 +183,6 @@ class CoPilotProcessor:
         back to the bundled binary when no override is set.
         """
         try:
-            from backend.copilot.config import ChatConfig
-
             cfg = ChatConfig()
             cli_path: str | None = cfg.claude_agent_cli_path
             if not cli_path:

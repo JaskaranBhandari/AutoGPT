@@ -215,17 +215,19 @@ def test_sdk_exports_hook_event_type(hook_event: str):
 # message that points the next person at the OpenRouter compat issue
 # instead of letting them silently re-break production.
 
-# CLI versions verified to work against OpenRouter when the
-# ``CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`` env var is set --
-# bisected via the reproduction test in ``cli_openrouter_compat_test.py``.
+# CLI versions bisect-verified as OpenRouter-safe.  2.1.63 and 2.1.70 pre-date
+# the context-management beta regression and work without any env var.  2.1.97+
+# requires ``CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`` (injected by
+# ``build_sdk_env()`` in ``env.py``) to strip the beta header.
 _KNOWN_GOOD_BUNDLED_CLI_VERSIONS: frozenset[str] = frozenset(
     {
         "2.1.63",  # claude-agent-sdk 0.1.45 -- original pin from PR #12294.
         "2.1.70",  # claude-agent-sdk 0.1.47 -- first version with the
         #          tool_reference proxy detection fix; bisect-verified
         #          OpenRouter-safe in #12742.
-        "2.1.97",  # claude-agent-sdk 0.1.58 -- works with the
-        #          CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 env var.
+        "2.1.97",  # claude-agent-sdk 0.1.58 -- OpenRouter-safe only with
+        #          CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 (injected by
+        #          build_sdk_env() in env.py).
     }
 )
 

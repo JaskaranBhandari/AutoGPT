@@ -138,6 +138,7 @@ class TestBuildSdkEnvOpenRouter:
             result = build_sdk_env()
 
         assert result["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
 
     def test_strips_trailing_v1_and_slash(self):
         """Trailing slash before /v1 strip is handled."""
@@ -149,6 +150,7 @@ class TestBuildSdkEnvOpenRouter:
 
         # rstrip("/") first, then remove /v1
         assert result["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
 
     def test_no_v1_suffix_left_alone(self):
         """A base URL without /v1 is used as-is."""
@@ -159,6 +161,7 @@ class TestBuildSdkEnvOpenRouter:
             result = build_sdk_env()
 
         assert result["ANTHROPIC_BASE_URL"] == "https://custom-proxy.example.com"
+        assert result.get("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS") == "1"
 
     def test_session_id_header(self):
         cfg = self._openrouter_config()

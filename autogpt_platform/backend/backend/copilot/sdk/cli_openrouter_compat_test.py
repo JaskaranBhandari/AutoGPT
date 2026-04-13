@@ -443,14 +443,15 @@ def _assert_no_forbidden_patterns(
         f"Bundled Claude Code CLI sent OpenRouter-incompatible features in "
         f"{len(all_findings)} request(s):\n  - "
         + "\n  - ".join(all_findings)
-        + "\n\nThis is the regression that prevents us from upgrading "
-        "`claude-agent-sdk` above 0.1.45. See "
-        "https://github.com/Significant-Gravitas/AutoGPT/pull/12294 and "
+        + "\n\nThe bundled CLI is sending OpenRouter-incompatible features. "
+        "See https://github.com/Significant-Gravitas/AutoGPT/pull/12294 and "
         "https://github.com/anthropics/claude-agent-sdk-python/issues/789. "
-        "If you intended to upgrade, ensure "
-        "`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` is set in the SDK env "
-        "or use a known-good CLI binary via `claude_agent_cli_path` (env: "
-        "`CLAUDE_AGENT_CLI_PATH` or `CHAT_CLAUDE_AGENT_CLI_PATH`)."
+        "If you bumped `claude-agent-sdk`, verify the new bundled CLI works "
+        "with `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` set (injected by "
+        "``build_sdk_env()`` in ``env.py``), then add the CLI version to "
+        "`_KNOWN_GOOD_BUNDLED_CLI_VERSIONS` in `sdk_compat_test.py`. "
+        "Alternatively, pin a known-good binary via `claude_agent_cli_path` "
+        "(env: `CLAUDE_AGENT_CLI_PATH` or `CHAT_CLAUDE_AGENT_CLI_PATH`)."
     )
 
 
