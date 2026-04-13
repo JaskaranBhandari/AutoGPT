@@ -347,9 +347,7 @@ class ChatConfig(BaseSettings):
                     "the bundled CLI."
                 )
             if not os.path.isfile(v):
-                raise ValueError(
-                    f"claude_agent_cli_path '{v}' is not a regular file."
-                )
+                raise ValueError(f"claude_agent_cli_path '{v}' is not a regular file.")
             if not os.access(v, os.X_OK):
                 raise ValueError(
                     f"claude_agent_cli_path '{v}' exists but is not executable. "
