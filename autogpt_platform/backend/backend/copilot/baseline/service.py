@@ -57,6 +57,7 @@ from backend.copilot.service import (
     _update_title_async,
     config,
     inject_user_context,
+    strip_user_context_tags,
 )
 from backend.copilot.token_tracking import persist_and_record_usage
 from backend.copilot.tools import execute_tool, get_available_tools
@@ -921,6 +922,11 @@ async def stream_chat_completion_baseline(
             f"Session {session_id} not found. Please create a new session first."
         )
 
+    # Strip any user-injected <user_context> tags on every turn.
+    # Only the server-injected prefix on the first message is trusted.
+    if message:
+        message = strip_user_context_tags(message)
+
     if maybe_append_user_message(session, message, is_user_message):
         if is_user_message:
             track_user_message(
@@ -963,6 +969,7 @@ async def stream_chat_completion_baseline(
     # role calls (e.g. tool-result submissions) on the first turn don't trigger
     # a needless DB lookup for user understanding.
     should_inject_user_context = is_first_turn and is_user_message
+
     if should_inject_user_context:
         prompt_task = _build_system_prompt(user_id)
     else:
@@ -1051,7 +1058,7 @@ async def stream_chat_completion_baseline(
     # Done before attachment/URL injection so the context prefix lands at
     # the very start of the message content.
     user_message_for_transcript = message
-    if should_inject_user_context and understanding:
+    if should_inject_user_context:
         prefixed = await inject_user_context(
             understanding, message or "", session_id, session.messages
         )
