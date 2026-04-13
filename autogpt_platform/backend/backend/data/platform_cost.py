@@ -7,7 +7,6 @@ from prisma.models import PlatformCostLog as PrismaLog
 from prisma.models import User as PrismaUser
 from prisma.types import PlatformCostLogCreateInput, PlatformCostLogWhereInput
 from pydantic import BaseModel
-from typing_extensions import TypedDict
 
 from backend.data.db import query_raw_with_schema
 from backend.util.cache import cached
@@ -164,7 +163,7 @@ class CostLogRow(BaseModel):
     cache_creation_tokens: int | None = None
 
 
-class CostBucket(TypedDict):
+class CostBucket(BaseModel):
     bucket: str
     count: int
 
@@ -244,6 +243,66 @@ def _build_prisma_where(
     return where
 
 
+def _build_raw_where(
+    start: datetime | None,
+    end: datetime | None,
+    provider: str | None,
+    user_id: str | None,
+    model: str | None = None,
+    block_name: str | None = None,
+    tracking_type: str | None = None,
+) -> tuple[str, list]:
+    """Build a parameterised WHERE clause for raw SQL queries.
+
+    Mirrors the filter logic of ``_build_prisma_where`` so there is a single
+    source of truth for which columns are filtered and how. The first clause
+    always restricts to ``cost_usd`` tracking type unless *tracking_type* is
+    explicitly provided by the caller.
+    """
+    params: list = []
+    clauses: list[str] = []
+    idx = 1
+
+    # Always filter by tracking type — defaults to cost_usd for percentile /
+    # bucket queries that only make sense on cost-denominated rows.
+    tt = tracking_type if tracking_type is not None else "cost_usd"
+    clauses.append(f'"trackingType" = ${idx}')
+    params.append(tt)
+    idx += 1
+
+    if start is not None:
+        clauses.append(f'"createdAt" >= ${idx}')
+        params.append(start)
+        idx += 1
+
+    if end is not None:
+        clauses.append(f'"createdAt" <= ${idx}')
+        params.append(end)
+        idx += 1
+
+    if provider is not None:
+        clauses.append(f'"provider" = ${idx}')
+        params.append(provider.lower())
+        idx += 1
+
+    if user_id is not None:
+        clauses.append(f'"userId" = ${idx}')
+        params.append(user_id)
+        idx += 1
+
+    if model is not None:
+        clauses.append(f'"model" = ${idx}')
+        params.append(model)
+        idx += 1
+
+    if block_name is not None:
+        clauses.append(f'LOWER("blockName") = LOWER(${idx})')
+        params.append(block_name)
+        idx += 1
+
+    return (" AND ".join(clauses), params)
+
+
 @cached(ttl_seconds=30)
 async def get_platform_cost_dashboard(
     start: datetime | None = None,
@@ -291,59 +350,14 @@ async def get_platform_cost_dashboard(
     }
 
     # Build parameterised WHERE clause for the raw SQL percentile/bucket
-    # queries so they honour all active dashboard filters, not just start date.
-    raw_params: list = [start]
-    raw_where_clauses = [
-        "\"trackingType\" = 'cost_usd'",
-        '"createdAt" >= $1',
-    ]
-    param_idx = 2  # $1 is already start
+    # queries.  Uses _build_raw_where so filter logic is shared with
+    # _build_prisma_where and only maintained in one place.
+    raw_where, raw_params = _build_raw_where(
+        start, end, provider, user_id, model, block_name, tracking_type
+    )
 
-    if end is not None:
-        raw_where_clauses.append(f'"createdAt" <= ${param_idx}')
-        raw_params.append(end)
-        param_idx += 1
-
-    if provider is not None:
-        raw_where_clauses.append(f'"provider" = ${param_idx}')
-        raw_params.append(provider.lower())
-        param_idx += 1
-
-    if user_id is not None:
-        raw_where_clauses.append(f'"userId" = ${param_idx}')
-        raw_params.append(user_id)
-        param_idx += 1
-
-    if model is not None:
-        raw_where_clauses.append(f'"model" = ${param_idx}')
-        raw_params.append(model)
-        param_idx += 1
-
-    if block_name is not None:
-        raw_where_clauses.append(f'LOWER("blockName") = LOWER(${param_idx})')
-        raw_params.append(block_name)
-        param_idx += 1
-
-    # If the caller supplied a specific tracking_type filter, replace the
-    # hardcoded cost_usd clause so the percentile/bucket queries respect it.
-    if tracking_type is not None:
-        raw_where_clauses[0] = f'"trackingType" = ${param_idx}'
-        raw_params.append(tracking_type)
-        param_idx += 1
-
-    raw_where = " AND ".join(raw_where_clauses)
-
-    # Run all eight aggregation queries in parallel.
-    (
-        by_provider_groups,
-        by_user_groups,
-        by_user_tracking_groups,
-        total_user_groups,
-        total_agg_groups,
-        total_agg_no_tracking_type_groups,
-        percentile_rows,
-        bucket_rows,
-    ) = await asyncio.gather(
+    # Queries that always run regardless of tracking_type filter.
+    common_queries = [
         # (provider, trackingType, model) aggregation — no ORDER BY in ORM;
         # sort by total cost descending in Python after fetch.
         PrismaLog.prisma().group_by(
@@ -379,20 +393,6 @@ async def get_platform_cost_dashboard(
         PrismaLog.prisma().group_by(
             by=["provider", "trackingType"],
             where=where,
-            sum={
-                "costMicrodollars": True,
-                "inputTokens": True,
-                "outputTokens": True,
-            },
-            count=True,
-        ),
-        # Total aggregate (no tracking_type filter): used to compute
-        # cost_bearing_requests and token_bearing_requests denominators so
-        # global avg stats remain meaningful when the caller filters the main
-        # view by a specific tracking_type (e.g. 'tokens').
-        PrismaLog.prisma().group_by(
-            by=["provider", "trackingType"],
-            where=where_no_tracking_type,
             sum={
                 "costMicrodollars": True,
                 "inputTokens": True,
@@ -440,6 +440,43 @@ async def get_platform_cost_dashboard(
             ' ORDER BY MIN("costMicrodollars")',
             *raw_params,
         ),
+    ]
+
+    # Only run the unfiltered aggregate query when tracking_type is set;
+    # when tracking_type is None, the filtered query already contains all
+    # tracking types and reusing it avoids a redundant full aggregation.
+    if tracking_type is not None:
+        common_queries.append(
+            # Total aggregate (no tracking_type filter): used to compute
+            # cost_bearing_requests and token_bearing_requests denominators so
+            # global avg stats remain meaningful when the caller filters the
+            # main view by a specific tracking_type (e.g. 'tokens').
+            PrismaLog.prisma().group_by(
+                by=["provider", "trackingType"],
+                where=where_no_tracking_type,
+                sum={
+                    "costMicrodollars": True,
+                    "inputTokens": True,
+                    "outputTokens": True,
+                },
+                count=True,
+            )
+        )
+
+    results = await asyncio.gather(*common_queries)
+
+    # Unpack results by name for clarity.
+    by_provider_groups = results[0]
+    by_user_groups = results[1]
+    by_user_tracking_groups = results[2]
+    total_user_groups = results[3]
+    total_agg_groups = results[4]
+    percentile_rows = results[5]
+    bucket_rows = results[6]
+    # When tracking_type is None, the filtered and unfiltered queries are
+    # identical — reuse total_agg_groups to avoid the extra DB round-trip.
+    total_agg_no_tracking_type_groups = (
+        results[7] if tracking_type is not None else total_agg_groups
     )
 
     # Sort by_provider by total cost descending and cap at MAX_PROVIDER_ROWS.
