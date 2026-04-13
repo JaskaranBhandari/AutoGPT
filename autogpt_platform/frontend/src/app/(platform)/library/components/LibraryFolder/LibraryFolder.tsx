@@ -2,12 +2,7 @@
 
 import { Text } from "@/components/atoms/Text/Text";
 import { Button } from "@/components/atoms/Button/Button";
-import {
-  FolderIcon,
-  FolderColor,
-  folderCardStyles,
-  resolveColor,
-} from "./FolderIcon";
+import { FolderIcon, FolderColor } from "./FolderIcon";
 import { useState } from "react";
 import { PencilSimpleIcon, TrashIcon } from "@phosphor-icons/react";
 import type { AgentStatus } from "../../types";
@@ -41,8 +36,6 @@ export function LibraryFolder({
 }: Props) {
   const [isHovered, setIsHovered] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
-  const resolvedColor = resolveColor(color);
-  const cardStyle = folderCardStyles[resolvedColor];
 
   function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
     if (e.dataTransfer.types.includes("application/agent-id")) {

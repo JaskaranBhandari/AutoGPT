@@ -232,7 +232,9 @@ export function useLibraryAgentList({
         (exec.status === AgentExecutionStatus.FAILED ||
           exec.status === AgentExecutionStatus.TERMINATED) &&
         exec.ended_at &&
-        new Date(exec.ended_at as string).getTime() > cutoff
+        (exec.ended_at instanceof Date
+          ? exec.ended_at.getTime()
+          : new Date(String(exec.ended_at)).getTime()) > cutoff
       ) {
         errors.add(exec.graph_id);
       }

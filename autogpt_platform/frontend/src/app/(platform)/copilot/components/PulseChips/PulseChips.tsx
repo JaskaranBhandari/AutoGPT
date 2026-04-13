@@ -28,7 +28,9 @@ export function PulseChips({ chips, onChipClick }: Props) {
   if (chips.length === 0) return null;
 
   return (
-    <div className={`${styles.glassPanel} mx-[0.6875rem] mb-5 rounded-large p-5`}>
+    <div
+      className={`${styles.glassPanel} mx-[0.6875rem] mb-5 rounded-large p-5`}
+    >
       <div className="mb-3 flex items-center gap-3">
         <Text variant="body-medium" className="text-zinc-600">
           What&apos;s happening with your agents

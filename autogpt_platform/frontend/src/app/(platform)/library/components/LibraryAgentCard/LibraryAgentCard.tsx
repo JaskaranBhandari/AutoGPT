@@ -16,7 +16,6 @@ import { useFavoriteAnimation } from "../../context/FavoriteAnimationContext";
 import { StatusBadge } from "../StatusBadge/StatusBadge";
 import { ContextualActionButton } from "../ContextualActionButton/ContextualActionButton";
 import { useAgentStatus } from "../../hooks/useAgentStatus";
-import { formatTimeAgo } from "../../helpers";
 import {
   Tooltip,
   TooltipContent,
@@ -29,7 +28,7 @@ interface Props {
 }
 
 export function LibraryAgentCard({ agent, draggable = true }: Props) {
-  const { id, name, graph_id, can_access_graph, image_url } = agent;
+  const { id, name, image_url } = agent;
   const router = useRouter();
   const { triggerFavoriteAnimation } = useFavoriteAnimation();
   const statusInfo = useAgentStatus(agent);
@@ -39,16 +38,12 @@ export function LibraryAgentCard({ agent, draggable = true }: Props) {
     e.dataTransfer.effectAllowed = "move";
   }
 
-  const {
-    isFavorite,
-    handleToggleFavorite,
-  } = useLibraryAgentCard({
+  const { isFavorite, handleToggleFavorite } = useLibraryAgentCard({
     agent,
     onFavoriteAdd: triggerFavoriteAnimation,
   });
 
   const hasError = statusInfo.status === "error";
-  const isRunning = statusInfo.status === "running";
 
   const card = (
     <div
@@ -62,9 +57,7 @@ export function LibraryAgentCard({ agent, draggable = true }: Props) {
         data-agent-id={id}
         className={cn(
           "group relative inline-flex h-auto min-h-[10.625rem] w-full max-w-[25rem] flex-col items-start justify-start gap-2.5 rounded-medium border bg-white hover:shadow-md",
-          hasError
-            ? "border-red-400"
-            : "border-zinc-100",
+          hasError ? "border-red-400" : "border-zinc-100",
         )}
         transition={{
           type: "spring",
@@ -128,8 +121,6 @@ export function LibraryAgentCard({ agent, draggable = true }: Props) {
             )}
           </NextLink>
 
-
-
           <div className="mt-4 flex w-full items-center justify-end gap-1 border-t border-zinc-100 pb-0 pt-2">
             <button
               type="button"
@@ -140,10 +131,7 @@ export function LibraryAgentCard({ agent, draggable = true }: Props) {
               <EyeIcon size={14} className="shrink-0" />
               See tasks
             </button>
-            <ContextualActionButton
-              status={statusInfo.status}
-              agentID={id}
-            />
+            <ContextualActionButton status={statusInfo.status} agentID={id} />
             <button
               type="button"
               onClick={() => {

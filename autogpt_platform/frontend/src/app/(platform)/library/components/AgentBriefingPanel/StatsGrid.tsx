@@ -71,7 +71,6 @@ export function StatsGrid({ summary, activeTab, onTabChange }: Props) {
         const rawValue = summary[tile.key];
         const value = tile.format ? tile.format(rawValue) : rawValue;
         const isActive = activeTab === tile.filter;
-        const isEmpty = rawValue === 0 && tile.filter !== "all";
 
         return (
           <button

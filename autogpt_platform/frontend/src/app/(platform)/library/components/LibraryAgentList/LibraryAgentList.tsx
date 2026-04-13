@@ -134,14 +134,17 @@ export function LibraryAgentList({
 
   return (
     <>
-      {isAgentBriefingEnabled && !selectedFolderId && fleetSummary && allAgents.length > 0 && (
-        <div className="mb-4">
-          <AgentBriefingPanel
-            summary={fleetSummary}
-            agents={briefingAgents ?? allAgents}
-          />
-        </div>
-      )}
+      {isAgentBriefingEnabled &&
+        !selectedFolderId &&
+        fleetSummary &&
+        allAgents.length > 0 && (
+          <div className="mb-4">
+            <AgentBriefingPanel
+              summary={fleetSummary}
+              agents={briefingAgents ?? allAgents}
+            />
+          </div>
+        )}
 
       {!selectedFolderId && (
         <LibrarySubSection

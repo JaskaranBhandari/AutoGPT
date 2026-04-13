@@ -5,7 +5,6 @@ import { ClockCounterClockwise } from "@phosphor-icons/react";
 import type { LibraryAgent } from "@/app/api/__generated__/models/libraryAgent";
 import { useSitrepItems } from "./useSitrepItems";
 import { SitrepItem } from "./SitrepItem";
-import { useAutoPilotBridge } from "@/contexts/AutoPilotBridgeContext";
 
 interface Props {
   agents: LibraryAgent[];
@@ -14,7 +13,6 @@ interface Props {
 
 export function SitrepList({ agents, maxItems = 10 }: Props) {
   const items = useSitrepItems(agents, maxItems);
-  const { sendPrompt } = useAutoPilotBridge();
 
   if (items.length === 0) return null;
 
@@ -28,7 +26,7 @@ export function SitrepList({ agents, maxItems = 10 }: Props) {
       </div>
       <div className="grid grid-cols-1 gap-1 lg:grid-cols-2">
         {items.map((item) => (
-          <SitrepItem key={item.id} item={item} onAskAutoPilot={sendPrompt} />
+          <SitrepItem key={item.id} item={item} />
         ))}
       </div>
     </div>

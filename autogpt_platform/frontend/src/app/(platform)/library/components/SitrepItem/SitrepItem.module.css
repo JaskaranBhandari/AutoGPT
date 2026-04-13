@@ -5,11 +5,7 @@
     radial-gradient(farthest-side, currentColor 94%, #0000) top/3px 3px
       no-repeat,
     conic-gradient(#0000 30%, currentColor);
-  -webkit-mask: radial-gradient(
-    farthest-side,
-    #0000 calc(100% - 3px),
-    #000 0
-  );
+  -webkit-mask: radial-gradient(farthest-side, #0000 calc(100% - 3px), #000 0);
   mask: radial-gradient(farthest-side, #0000 calc(100% - 3px), #000 0);
   animation: spin 1s infinite linear;
 }

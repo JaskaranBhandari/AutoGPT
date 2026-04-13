@@ -3,9 +3,7 @@
 import type { CoPilotUsageStatus } from "@/app/api/__generated__/models/coPilotUsageStatus";
 import type { LibraryAgent } from "@/app/api/__generated__/models/libraryAgent";
 import { useGetV2GetCopilotUsage } from "@/app/api/__generated__/endpoints/chat/chat";
-import {
-  formatResetTime,
-} from "@/app/(platform)/copilot/components/UsageLimits/UsagePanelContent";
+import { formatResetTime } from "@/app/(platform)/copilot/components/UsageLimits/UsagePanelContent";
 import { formatCents } from "@/app/(platform)/copilot/components/RateLimitResetDialog/RateLimitResetDialog";
 import { useResetRateLimit } from "@/app/(platform)/copilot/hooks/useResetRateLimit";
 import { Button } from "@/components/atoms/Button/Button";
@@ -140,7 +138,11 @@ function ExecutionListSection({
       </div>
       {hasMore && (
         <div className="mt-3 flex justify-center">
-          <Button variant="secondary" size="small" onClick={() => setShowAll(!showAll)}>
+          <Button
+            variant="secondary"
+            size="small"
+            onClick={() => setShowAll(!showAll)}
+          >
             {showAll ? "Collapse" : `Show all (${filtered.length})`}
           </Button>
         </div>
@@ -206,7 +208,11 @@ function AgentListSection({
       </div>
       {hasMore && (
         <div className="mt-3 flex justify-center">
-          <Button variant="secondary" size="small" onClick={() => setShowAll(!showAll)}>
+          <Button
+            variant="secondary"
+            size="small"
+            onClick={() => setShowAll(!showAll)}
+          >
             {showAll ? "Collapse" : `Show all (${filtered.length})`}
           </Button>
         </div>

@@ -114,7 +114,7 @@ export function CopilotPage() {
     rateLimitMessage,
     dismissRateLimit,
     // Dry run dev toggle
-    isDryRun,
+    isDryRun: _isDryRun,
   } = useCopilotPage();
 
   const {

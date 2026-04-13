@@ -35,6 +35,9 @@ export function useSitrepItems(
       running: 1,
       stale: 2,
       success: 3,
+      listening: 4,
+      scheduled: 5,
+      idle: 6,
     };
     items.sort((a, b) => order[a.priority] - order[b.priority]);
 

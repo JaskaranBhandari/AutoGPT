@@ -80,8 +80,7 @@ export function EmptySession({
       >
         <div className="mx-auto max-w-[52rem]">
           <Text variant="h3" className="mb-1 !text-[1.375rem] text-zinc-700">
-            Hey,{" "}
-            <span className="text-violet-600">{greetingName}</span>
+            Hey, <span className="text-violet-600">{greetingName}</span>
             <EditNameDialog currentName={greetingName} />
           </Text>
           <Text variant="h3" className="mb-8 !font-normal">

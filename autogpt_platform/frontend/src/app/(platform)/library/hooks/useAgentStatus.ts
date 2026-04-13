@@ -67,9 +67,7 @@ export function useAgentStatus(agent: LibraryAgent): AgentStatusInfo {
           isFailed(e.status) &&
           e.ended_at &&
           new Date(
-            e.ended_at instanceof Date
-              ? e.ended_at.getTime()
-              : e.ended_at,
+            e.ended_at instanceof Date ? e.ended_at.getTime() : e.ended_at,
           ).getTime() > cutoff,
       );
 
@@ -88,16 +86,22 @@ export function useAgentStatus(agent: LibraryAgent): AgentStatusInfo {
       }
     }
 
-    const completedExecs = agentExecutions.filter(
-      (e) => e.ended_at,
-    );
+    const completedExecs = agentExecutions.filter((e) => e.ended_at);
     if (completedExecs.length > 0) {
       const sorted = completedExecs.sort((a, b) => {
-        const aTime = new Date(a.ended_at as string).getTime();
-        const bTime = new Date(b.ended_at as string).getTime();
+        const aTime =
+          a.ended_at instanceof Date
+            ? a.ended_at.getTime()
+            : new Date(String(a.ended_at)).getTime();
+        const bTime =
+          b.ended_at instanceof Date
+            ? b.ended_at.getTime()
+            : new Date(String(b.ended_at)).getTime();
         return bTime - aTime;
       });
-      lastRunAt = sorted[0].ended_at as string;
+      const endedAt = sorted[0].ended_at;
+      lastRunAt =
+        endedAt instanceof Date ? endedAt.toISOString() : String(endedAt);
     }
 
     const totalRuns = agent.execution_count ?? agentExecutions.length;
