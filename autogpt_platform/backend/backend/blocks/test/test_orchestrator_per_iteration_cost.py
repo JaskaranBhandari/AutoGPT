@@ -11,62 +11,49 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from backend.blocks.orchestrator import OrchestratorBlock
+from backend.blocks._base import Block
+from backend.blocks.orchestrator import ExecutionParams, OrchestratorBlock
+from backend.data.execution import ExecutionContext, ExecutionStatus
+from backend.data.model import NodeExecutionStats
+from backend.executor import manager
+from backend.util.exceptions import InsufficientBalanceError
 
 # ── extra_credit_charges hook ────────────────────────────────────────
+
+
+class _NoOpBlock(Block):
+    """Minimal concrete Block subclass that does not override extra_credit_charges."""
+
+    def __init__(self):
+        super().__init__(id="noop-block", description="No-op test block")
+
+    def run(self, input_data, **kwargs):  # type: ignore[override]
+        yield "out", {}
 
 
 class TestExtraCreditCharges:
     """OrchestratorBlock opts into per-LLM-call billing via extra_credit_charges."""
 
     def test_orchestrator_returns_nonzero_for_multiple_calls(self):
-        from backend.data.model import NodeExecutionStats
-
         block = OrchestratorBlock()
         stats = NodeExecutionStats(llm_call_count=3)
         assert block.extra_credit_charges(stats) == 2
 
     def test_orchestrator_returns_zero_for_single_call(self):
-        from backend.data.model import NodeExecutionStats
-
         block = OrchestratorBlock()
         stats = NodeExecutionStats(llm_call_count=1)
         assert block.extra_credit_charges(stats) == 0
 
     def test_orchestrator_returns_zero_for_zero_calls(self):
-        from backend.data.model import NodeExecutionStats
-
         block = OrchestratorBlock()
         stats = NodeExecutionStats(llm_call_count=0)
         assert block.extra_credit_charges(stats) == 0
 
     def test_default_block_returns_zero(self):
-        from backend.data.model import NodeExecutionStats
-
-        # Use a concrete block (not the abstract Block base) to verify the
-        # default implementation returns 0.
-        block = OrchestratorBlock()
-        stats = NodeExecutionStats(llm_call_count=0)
-        # When llm_call_count=0, extra_credit_charges should clamp to 0.
+        """A block that does not override extra_credit_charges returns 0."""
+        block = _NoOpBlock()
+        stats = NodeExecutionStats(llm_call_count=10)
         assert block.extra_credit_charges(stats) == 0
-
-        # Also verify via Block.extra_credit_charges directly (method-level
-        # check) by calling the unbound method on an OrchestratorBlock
-        # instance with the base implementation patched out.
-        from unittest.mock import patch
-
-        from backend.blocks._base import Block
-
-        with patch.object(
-            OrchestratorBlock,
-            "extra_credit_charges",
-            Block.extra_credit_charges,
-        ):
-            base_block = OrchestratorBlock()
-            assert (
-                base_block.extra_credit_charges(NodeExecutionStats(llm_call_count=10))
-                == 0
-            )
 
 
 # ── charge_extra_iterations math ───────────────────────────────────
@@ -91,9 +78,11 @@ def patched_processor(monkeypatch):
 
     Returns the processor and a list of credit amounts spent so tests can
     assert on what was charged.
-    """
-    from backend.executor import manager
 
+    Note: ``ExecutionProcessor.__new__()`` bypasses ``__init__`` — if
+    ``__init__`` gains required state in the future this fixture will need
+    updating.
+    """
     spent: list[int] = []
 
     class FakeDb:
@@ -156,7 +145,6 @@ class TestChargeExtraIterations:
     @pytest.mark.asyncio
     async def test_capped_at_max(self, monkeypatch, fake_node_exec):
         """Runaway llm_call_count is capped at _MAX_EXTRA_ITERATIONS."""
-        from backend.executor import manager
 
         spent: list[int] = []
 
@@ -187,7 +175,6 @@ class TestChargeExtraIterations:
 
     @pytest.mark.asyncio
     async def test_zero_base_cost_skips_charge(self, monkeypatch, fake_node_exec):
-        from backend.executor import manager
 
         spent: list[int] = []
 
@@ -215,7 +202,6 @@ class TestChargeExtraIterations:
 
     @pytest.mark.asyncio
     async def test_block_not_found_skips_charge(self, monkeypatch, fake_node_exec):
-        from backend.executor import manager
 
         spent: list[int] = []
 
@@ -243,8 +229,6 @@ class TestChargeExtraIterations:
         self, monkeypatch, fake_node_exec
     ):
         """Out-of-credits errors must propagate, not be silently swallowed."""
-        from backend.executor import manager
-        from backend.util.exceptions import InsufficientBalanceError
 
         class FakeDb:
             def spend_credits(self, *, user_id, cost, metadata):
@@ -280,7 +264,6 @@ class TestChargeNodeUsage:
         self, monkeypatch, fake_node_exec
     ):
         """Nested tool charges should NOT inflate the per-execution counter."""
-        from backend.executor import manager
 
         captured: dict = {}
 
@@ -313,7 +296,6 @@ class TestChargeNodeUsage:
         self, monkeypatch, fake_node_exec
     ):
         """charge_node_usage should call _handle_low_balance when total_cost > 0."""
-        from backend.executor import manager
 
         low_balance_calls: list[dict] = []
 
@@ -353,7 +335,6 @@ class TestChargeNodeUsage:
         self, monkeypatch, fake_node_exec
     ):
         """charge_node_usage should NOT call _handle_low_balance when cost is 0."""
-        from backend.executor import manager
 
         low_balance_calls: list = []
 
@@ -418,9 +399,6 @@ def gated_processor(monkeypatch):
     llm_call_count, dry_run) and observe whether charge_extra_iterations
     was called.
     """
-    from backend.data.execution import ExecutionStatus
-    from backend.data.model import NodeExecutionStats
-    from backend.executor import manager
 
     calls: dict[str, list] = {
         "charge_extra_iterations": [],
@@ -492,9 +470,7 @@ def gated_processor(monkeypatch):
         fake_charge_extra,
     )
 
-    def fake_low_balance(
-        self, db_client, user_id, current_balance, transaction_cost
-    ):
+    def fake_low_balance(self, db_client, user_id, current_balance, transaction_cost):
         calls["handle_low_balance"].append(
             {
                 "user_id": user_id,
@@ -528,7 +504,6 @@ async def test_on_node_execution_charges_extra_iterations_when_gate_passes(
     gated_processor,
 ):
     """COMPLETED + extra_credit_charges > 0 + not dry_run → charged."""
-    from backend.data.execution import ExecutionStatus
 
     proc, calls, inner, fake_db, _ = gated_processor
     inner["status"] = ExecutionStatus.COMPLETED
@@ -555,7 +530,6 @@ async def test_on_node_execution_charges_extra_iterations_when_gate_passes(
 
 @pytest.mark.asyncio
 async def test_on_node_execution_skips_when_status_not_completed(gated_processor):
-    from backend.data.execution import ExecutionStatus
 
     proc, calls, inner, fake_db, _ = gated_processor
     inner["status"] = ExecutionStatus.FAILED
@@ -579,7 +553,6 @@ async def test_on_node_execution_skips_when_status_not_completed(gated_processor
 
 @pytest.mark.asyncio
 async def test_on_node_execution_skips_when_extra_charges_zero(gated_processor):
-    from backend.data.execution import ExecutionStatus
 
     proc, calls, inner, fake_db, _ = gated_processor
     inner["status"] = ExecutionStatus.COMPLETED
@@ -604,7 +577,6 @@ async def test_on_node_execution_skips_when_extra_charges_zero(gated_processor):
 
 @pytest.mark.asyncio
 async def test_on_node_execution_skips_when_dry_run(gated_processor):
-    from backend.data.execution import ExecutionStatus
 
     proc, calls, inner, fake_db, _ = gated_processor
     inner["status"] = ExecutionStatus.COMPLETED
@@ -640,9 +612,6 @@ async def test_on_node_execution_insufficient_balance_records_error_and_notifies
     - _handle_insufficient_funds_notif is called so the user is notified
     - the structured ERROR log is the alerting hook
     """
-    from backend.data.execution import ExecutionStatus
-    from backend.executor import manager
-    from backend.util.exceptions import InsufficientBalanceError
 
     proc, calls, inner, fake_db, _ = gated_processor
     inner["status"] = ExecutionStatus.COMPLETED
@@ -698,12 +667,8 @@ async def _run_tool_exec_with_stats(
     Used to prove the dry_run and error guards around charge_node_usage
     behave as documented, and that InsufficientBalanceError propagates.
     """
-    import threading
     from collections import defaultdict
     from unittest.mock import AsyncMock, MagicMock, patch
-
-    from backend.blocks.orchestrator import ExecutionParams, OrchestratorBlock
-    from backend.data.execution import ExecutionContext
 
     block = OrchestratorBlock()
 
@@ -828,10 +793,6 @@ async def test_tool_execution_insufficient_balance_propagates():
     If this leaked into a ToolCallResult the LLM loop would keep running
     with 'tool failed' errors and the user would get unpaid work.
     """
-    from unittest.mock import AsyncMock
-
-    from backend.util.exceptions import InsufficientBalanceError
-
     raising_charge = AsyncMock(
         side_effect=InsufficientBalanceError(
             user_id="u", message="nope", balance=0, amount=10
@@ -862,9 +823,6 @@ async def test_on_node_execution_failed_ibe_sends_notification(
     execution_stats.error=IBE. on_node_execution's post-execution block then
     sends the user notification so they understand why the run stopped.
     """
-    from backend.data.execution import ExecutionStatus
-    from backend.executor import manager
-    from backend.util.exceptions import InsufficientBalanceError
 
     proc, calls, inner, fake_db, NodeExecutionStats = gated_processor
     ibe = InsufficientBalanceError(
@@ -914,3 +872,102 @@ async def test_on_node_execution_failed_ibe_sends_notification(
     assert calls["handle_insufficient_funds_notif"][0]["user_id"] == "u"
     # charge_extra_iterations must NOT be called — status is FAILED.
     assert calls["charge_extra_iterations"] == []
+
+
+# ── Billing leak: non-IBE exception during extra-iteration charging ──
+
+
+@pytest.mark.asyncio
+async def test_on_node_execution_non_ibe_billing_failure_keeps_completed(
+    monkeypatch,
+    gated_processor,
+):
+    """When charge_extra_iterations raises a non-IBE exception (e.g. DB outage):
+
+    - execution_stats.error stays None (node ran to completion)
+    - status stays COMPLETED (work already done)
+    - the billing_leak error is logged but does not corrupt execution_stats
+    """
+    proc, calls, inner, fake_db, _ = gated_processor
+    inner["status"] = ExecutionStatus.COMPLETED
+    inner["llm_call_count"] = 4
+    fake_db.get_node = AsyncMock(return_value=_FakeNode(extra_charges=3))
+
+    async def raise_conn_error(self, node_exec, extra_iterations):
+        raise ConnectionError("DB connection lost")
+
+    monkeypatch.setattr(
+        manager.ExecutionProcessor, "charge_extra_iterations", raise_conn_error
+    )
+
+    stats_pair = (
+        MagicMock(
+            node_count=0,
+            nodes_cputime=0,
+            nodes_walltime=0,
+            cost=0,
+            node_error_count=0,
+        ),
+        threading.Lock(),
+    )
+    result_stats = await proc.on_node_execution(
+        node_exec=_make_node_exec(dry_run=False),
+        node_exec_progress=MagicMock(),
+        nodes_input_masks=None,
+        graph_stats_pair=stats_pair,
+    )
+    # error stays None — node completed, only billing failed.
+    assert result_stats.error is None
+    # No notification was sent (only IBE triggers notification).
+    assert len(calls["handle_insufficient_funds_notif"]) == 0
+
+
+# ── _charge_usage with execution_count=0 ──
+
+
+class TestChargeUsageZeroExecutionCount:
+    """Verify _charge_usage(node_exec, 0) does not invoke execution_usage_cost."""
+
+    def test_execution_count_zero_skips_execution_tier(self, monkeypatch):
+        """_charge_usage with execution_count=0 must not call execution_usage_cost."""
+        execution_tier_called = []
+
+        def fake_execution_usage_cost(count):
+            execution_tier_called.append(count)
+            return (100, count)
+
+        spent: list[int] = []
+
+        class FakeDb:
+            def spend_credits(self, *, user_id, cost, metadata):
+                spent.append(cost)
+                return 500
+
+        fake_block = MagicMock()
+        fake_block.name = "FakeBlock"
+
+        monkeypatch.setattr(manager, "get_db_client", lambda: FakeDb())
+        monkeypatch.setattr(manager, "get_block", lambda block_id: fake_block)
+        monkeypatch.setattr(
+            manager,
+            "block_usage_cost",
+            lambda block, input_data, **_kw: (10, {}),
+        )
+        monkeypatch.setattr(manager, "execution_usage_cost", fake_execution_usage_cost)
+
+        proc = manager.ExecutionProcessor.__new__(manager.ExecutionProcessor)
+        ne = MagicMock()
+        ne.user_id = "u"
+        ne.graph_exec_id = "ge"
+        ne.graph_id = "g"
+        ne.node_exec_id = "ne"
+        ne.node_id = "n"
+        ne.block_id = "b"
+        ne.inputs = {}
+
+        total_cost, remaining = proc._charge_usage(ne, 0)
+        assert total_cost == 10  # block cost only
+        assert remaining == 500
+        assert spent == [10]
+        # execution_usage_cost must NOT have been called
+        assert execution_tier_called == []

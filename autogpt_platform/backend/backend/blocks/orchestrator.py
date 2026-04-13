@@ -365,9 +365,15 @@ def _disambiguate_tool_names(tools: list[dict[str, Any]]) -> None:
 
 
 class OrchestratorBlock(Block):
-    """
-    A block that uses a language model to orchestrate tool calls, supporting both
-    single-shot and iterative agent mode execution.
+    """A block that uses a language model to orchestrate tool calls.
+
+    Supports both single-shot and iterative agent mode execution.
+
+    **InsufficientBalanceError propagation contract**: ``InsufficientBalanceError``
+    (IBE) must always re-raise through every ``except`` block in this class.
+    Swallowing IBE would let the agent loop continue with unpaid work. Every
+    exception handler that catches ``Exception`` includes an explicit IBE
+    re-raise carve-out for this reason.
     """
 
     def extra_credit_charges(self, execution_stats: NodeExecutionStats) -> int:
@@ -1182,8 +1188,12 @@ class OrchestratorBlock(Block):
                         node_exec_entry,
                     )
                 except InsufficientBalanceError:
+                    # IBE must propagate — see OrchestratorBlock class docstring.
                     raise
                 except Exception:
+                    # Non-billing charge failures (DB outage, network, etc.)
+                    # are logged with full traceback but surfaced to the LLM
+                    # as a generic error to avoid leaking infrastructure details.
                     logger.exception(
                         "Unexpected error charging for tool node %s",
                         sink_node_id,
@@ -1210,17 +1220,15 @@ class OrchestratorBlock(Block):
             return resp
 
         except InsufficientBalanceError:
-            # Don't downgrade billing failures into tool errors — let the
-            # orchestrator's outer error handling stop the run cleanly,
-            # mirroring the behaviour of the main execution queue. Also
-            # prevents leaking exact balance amounts to the LLM context.
+            # IBE must propagate — see class docstring.
             raise
         except Exception as e:
-            logger.warning("Tool execution with manager failed: %s", e)
-            # Return error response
+            logger.warning("Tool execution with manager failed: %s", e, exc_info=True)
+            # Return a generic error to the LLM — internal exception messages
+            # may contain server paths, DB details, or infrastructure info.
             resp = _create_tool_response(
                 tool_call.id,
-                f"Tool execution failed: {e}",
+                "Tool execution failed due to an internal error",
                 responses_api=responses_api,
             )
             resp["_is_error"] = True
@@ -1324,7 +1332,7 @@ class OrchestratorBlock(Block):
                 content = str(raw_content)
             else:
                 content = "Tool executed successfully"
-            tool_failed = result.get("_is_error", False)
+            tool_failed = result.get("_is_error", True)
             return ToolCallResult(
                 tool_call_id=tool_call.id,
                 tool_name=tool_call.name,
@@ -1332,11 +1340,7 @@ class OrchestratorBlock(Block):
                 is_error=tool_failed,
             )
         except InsufficientBalanceError:
-            # Billing failures must stop the agent loop cleanly — do NOT
-            # downgrade them into a tool error that gets fed back to the
-            # LLM. Re-raise so the orchestrator's outer error handling
-            # halts the run (mirrors main execution queue behaviour) and
-            # avoids leaking exact balance amounts into LLM context.
+            # IBE must propagate — see class docstring.
             raise
         except Exception as e:
             logger.error("Tool execution failed: %s", e)
@@ -1458,11 +1462,7 @@ class OrchestratorBlock(Block):
                         },
                     )
         except InsufficientBalanceError:
-            # Billing failures must propagate out of the block so the
-            # executor's billing-leak handling fires (error recording on
-            # execution_stats, user notification, structured logging).
-            # Do NOT downgrade to a user-visible "error" output — that
-            # would swallow the failure and leak the exact balance amount.
+            # IBE must propagate — see class docstring.
             raise
         except Exception as e:
             # Catch all OTHER errors (validation, network, API) so that
@@ -1545,17 +1545,13 @@ class OrchestratorBlock(Block):
                             text = content
                         else:
                             text = json.dumps(content)
-                        tool_failed = result.get("_is_error", False)
+                        tool_failed = result.get("_is_error", True)
                         return {
                             "content": [{"type": "text", "text": text}],
                             "isError": tool_failed,
                         }
                     except InsufficientBalanceError:
-                        # Same carve-out as _agent_mode_tool_executor:
-                        # billing failures must propagate to stop the run
-                        # rather than be fed back to the LLM as a tool
-                        # error (which would leak balance amounts and let
-                        # the loop continue consuming unbillable work).
+                        # IBE must propagate — see class docstring.
                         raise
                     except Exception as e:
                         logger.error("SDK tool execution failed: %s", e)
@@ -1836,12 +1832,8 @@ class OrchestratorBlock(Block):
                         except (asyncio.CancelledError, StopAsyncIteration):
                             pass
         except InsufficientBalanceError:
-            # Billing failures must propagate so the executor's
-            # billing-leak handling fires (error recording, user
-            # notification, structured logging). Mirrors the carve-out
-            # in _execute_tools_agent_mode — do not downgrade to a
-            # user-visible error output. The `finally` block below
-            # still runs and records partial token usage.
+            # IBE must propagate — see class docstring. The `finally`
+            # block below still runs and records partial token usage.
             raise
         except Exception as e:
             # Surface OTHER SDK errors as user-visible output instead
