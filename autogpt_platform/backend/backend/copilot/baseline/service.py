@@ -415,6 +415,13 @@ async def _baseline_llm_caller(
             )
         tool_calls_by_index: dict[int, dict[str, str]] = {}
 
+        # Snapshot token counts before this call so we can compute the delta
+        # used for fallback cost estimation (state fields are accumulated across
+        # all tool-call turns, so we must not pass the cumulative total to the
+        # per-call cost estimator).
+        prompt_tokens_before = state.turn_prompt_tokens
+        completion_tokens_before = state.turn_completion_tokens
+
         async for chunk in response:
             if chunk.usage:
                 state.turn_prompt_tokens += chunk.usage.prompt_tokens or 0
@@ -425,6 +432,11 @@ async def _baseline_llm_caller(
                 if ptd:
                     state.turn_cache_read_tokens += (
                         getattr(ptd, "cached_tokens", 0) or 0
+                    )
+                    # cache_creation_input_tokens is reported by some providers
+                    # (e.g. Anthropic native) but not standard OpenAI streaming.
+                    state.turn_cache_creation_tokens += (
+                        getattr(ptd, "cache_creation_input_tokens", 0) or 0
                     )
 
             delta = chunk.choices[0].delta if chunk.choices else None
@@ -495,13 +507,18 @@ async def _baseline_llm_caller(
 
         # Fallback: estimate cost from token counts when x-total-cost is
         # missing (e.g. some OpenRouter models don't report it).
+        # Use the delta for this call only — the state accumulators grow across
+        # all tool-call turns, so passing the cumulative total would
+        # compound-overestimate costs on the 2nd+ turn.
+        call_prompt_tokens = state.turn_prompt_tokens - prompt_tokens_before
+        call_completion_tokens = state.turn_completion_tokens - completion_tokens_before
         if not got_header_cost and (
-            state.turn_prompt_tokens > 0 or state.turn_completion_tokens > 0
+            call_prompt_tokens > 0 or call_completion_tokens > 0
         ):
             estimated = _estimate_cost_from_tokens(
                 state.model,
-                state.turn_prompt_tokens,
-                state.turn_completion_tokens,
+                call_prompt_tokens,
+                call_completion_tokens,
             )
             if estimated is not None:
                 state.cost_usd = (state.cost_usd or 0.0) + estimated
