@@ -152,18 +152,27 @@ class ChatConfig(BaseSettings):
         "overloaded). The SDK automatically retries with this cheaper model.",
     )
     claude_agent_max_turns: int = Field(
-        default=1000,
+        default=50,
         ge=1,
         le=10000,
         description="Maximum number of agentic turns (tool-use loops) per query. "
         "Prevents runaway tool loops from burning budget.",
     )
     claude_agent_max_budget_usd: float = Field(
-        default=100.0,
+        default=5.0,
         ge=0.01,
         le=1000.0,
         description="Maximum spend in USD per SDK query. The CLI aborts the "
         "request if this budget is exceeded.",
+    )
+    claude_agent_max_thinking_tokens: int = Field(
+        default=8192,
+        ge=1024,
+        le=128000,
+        description="Maximum thinking/reasoning tokens per LLM call. "
+        "Extended thinking on Opus can generate 50k+ tokens at $75/M — "
+        "capping this is the single biggest cost lever. "
+        "8192 is sufficient for most tasks; increase for complex reasoning.",
     )
     claude_agent_max_transient_retries: int = Field(
         default=3,
