@@ -451,8 +451,8 @@ async def get_platform_cost_dashboard(
     cost_p99 = float(pctl.get("p99") or 0)
 
     # Build cost bucket list.
-    cost_buckets = [
-        {"bucket": r["bucket"], "count": int(r["count"])} for r in bucket_rows
+    cost_buckets: list[CostBucket] = [
+        CostBucket(bucket=r["bucket"], count=int(r["count"])) for r in bucket_rows
     ]
 
     # Cost-bearing request count: only rows where trackingType == "cost_usd".
