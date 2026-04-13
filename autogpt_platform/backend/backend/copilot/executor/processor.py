@@ -169,22 +169,31 @@ class CoPilotProcessor:
 
         # Pre-warm the bundled CLI binary so the OS page-caches the ~185 MB
         # executable.  First spawn pays ~1.2 s; subsequent spawns ~0.65 s.
-        self._prewarm_cli()
+        # Read cli_path directly from env here so _prewarm_cli does not have
+        # to construct a ChatConfig() (which can raise and abort the worker).
+        cli_path = os.getenv("CLAUDE_AGENT_CLI_PATH") or os.getenv(
+            "CHAT_CLAUDE_AGENT_CLI_PATH"
+        )
+        self._prewarm_cli(cli_path=cli_path or None)
 
         logger.info(f"[CoPilotExecutor] Worker {self.tid} started")
 
-    def _prewarm_cli(self) -> None:
+    def _prewarm_cli(self, cli_path: str | None = None) -> None:
         """Run the Claude Code CLI binary once to warm OS page caches.
 
-        Honours the ``claude_agent_cli_path`` config override (which lets
-        us run a pinned CLI version independent of the bundled one in the
-        installed ``claude-agent-sdk`` wheel — see
-        ``ChatConfig.claude_agent_cli_path`` for the rationale). Falls
-        back to the bundled binary when no override is set.
+        Accepts an explicit ``cli_path`` so the caller can pass the value
+        already resolved at startup rather than constructing a full
+        ``ChatConfig()`` here (which reads env vars, runs validators, and
+        can raise — aborting the worker prewarm silently).  Falls back to
+        the ``CLAUDE_AGENT_CLI_PATH`` / ``CHAT_CLAUDE_AGENT_CLI_PATH`` env
+        vars (same precedence as ``ChatConfig``), and then to the SDK's
+        bundled binary when neither is set.
         """
         try:
-            cfg = ChatConfig()
-            cli_path: str | None = cfg.claude_agent_cli_path
+            if not cli_path:
+                cli_path = os.getenv("CLAUDE_AGENT_CLI_PATH") or os.getenv(
+                    "CHAT_CLAUDE_AGENT_CLI_PATH"
+                )
             if not cli_path:
                 from claude_agent_sdk._internal.transport.subprocess_cli import (
                     SubprocessCLITransport,
