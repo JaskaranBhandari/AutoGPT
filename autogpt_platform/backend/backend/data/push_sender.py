@@ -67,7 +67,9 @@ async def send_push_for_user(user_id: str, payload: NotificationPayload) -> None
         return
 
     push_data = _build_push_payload(payload)
-    vapid_claims = {"sub": _settings.secrets.vapid_claim_email}
+    vapid_claims: dict[str, str | int] = {
+        "sub": _settings.secrets.vapid_claim_email,
+    }
 
     async def _send_one(sub: PushSubscription) -> None:
         try:
