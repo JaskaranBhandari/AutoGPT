@@ -57,6 +57,7 @@ from backend.data.credit import (
     get_auto_top_up,
     get_subscription_price_id,
     get_user_credit_model,
+    handle_subscription_payment_failure,
     set_auto_top_up,
     set_subscription_tier,
     sync_subscription_from_stripe,
@@ -972,6 +973,9 @@ async def stripe_webhook(request: Request):
         "customer.subscription.deleted",
     ):
         await sync_subscription_from_stripe(data_object)
+
+    if event_type == "invoice.payment_failed":
+        await handle_subscription_payment_failure(data_object)
 
     # `handle_dispute` and `deduct_credits` expect Stripe SDK typed objects
     # (Dispute/Refund). The Stripe webhook payload's `data.object` is a

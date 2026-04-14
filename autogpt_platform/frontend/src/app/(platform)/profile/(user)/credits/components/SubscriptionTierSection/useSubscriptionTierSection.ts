@@ -7,12 +7,14 @@ import {
 import type { SubscriptionStatusResponse } from "@/app/api/__generated__/models/subscriptionStatusResponse";
 import type { SubscriptionTierRequestTier } from "@/app/api/__generated__/models/subscriptionTierRequestTier";
 import { useToast } from "@/components/molecules/Toast/use-toast";
+import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
 
 export type SubscriptionStatus = SubscriptionStatusResponse;
 
 const TIER_ORDER = ["FREE", "PRO", "BUSINESS", "ENTERPRISE"];
 
 export function useSubscriptionTierSection() {
+  const isPaymentEnabled = useGetFlag(Flag.ENABLE_PLATFORM_PAYMENT);
   const searchParams = useSearchParams();
   const subscriptionStatus = searchParams.get("subscription");
   const router = useRouter();
@@ -108,6 +110,7 @@ export function useSubscriptionTierSection() {
     tierError,
     isPending,
     pendingTier,
+    isPaymentEnabled,
     changeTier,
     handleTierChange,
   };

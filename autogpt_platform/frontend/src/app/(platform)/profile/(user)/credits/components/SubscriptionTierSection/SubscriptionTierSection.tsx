@@ -49,6 +49,7 @@ export function SubscriptionTierSection() {
     tierError,
     isPending,
     pendingTier,
+    isPaymentEnabled,
     changeTier,
     handleTierChange,
   } = useSubscriptionTierSection();
@@ -163,7 +164,7 @@ export function SubscriptionTierSection() {
                 {tier.description}
               </p>
 
-              {!isCurrent && (
+              {!isCurrent && isPaymentEnabled && (
                 <Button
                   className="w-full"
                   variant={isUpgrade ? "default" : "outline"}
@@ -190,7 +191,7 @@ export function SubscriptionTierSection() {
         })}
       </div>
 
-      {currentTier !== "FREE" && (
+      {currentTier !== "FREE" && isPaymentEnabled && (
         <p className="text-sm text-neutral-500">
           Your subscription is managed through Stripe. Changes take effect
           immediately.

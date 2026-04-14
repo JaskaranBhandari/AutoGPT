@@ -565,3 +565,41 @@ def test_stripe_webhook_dispatches_subscription_events(
 
     assert response.status_code == 200
     sync_mock.assert_awaited_once_with(stripe_sub_obj)
+
+
+def test_stripe_webhook_dispatches_invoice_payment_failed(
+    client: fastapi.testclient.TestClient,
+    mocker: pytest_mock.MockFixture,
+) -> None:
+    """POST /credits/stripe_webhook routes invoice.payment_failed to the failure handler."""
+    invoice_obj = {
+        "customer": "cus_test",
+        "subscription": "sub_test",
+        "amount_due": 1999,
+    }
+    event = {
+        "type": "invoice.payment_failed",
+        "data": {"object": invoice_obj},
+    }
+
+    mocker.patch(
+        "backend.api.features.v1.settings.secrets.stripe_webhook_secret",
+        new="whsec_test",
+    )
+    mocker.patch(
+        "backend.api.features.v1.stripe.Webhook.construct_event",
+        return_value=event,
+    )
+    failure_mock = mocker.patch(
+        "backend.api.features.v1.handle_subscription_payment_failure",
+        new_callable=AsyncMock,
+    )
+
+    response = client.post(
+        "/credits/stripe_webhook",
+        content=b"{}",
+        headers={"stripe-signature": "t=1,v1=abc"},
+    )
+
+    assert response.status_code == 200
+    failure_mock.assert_awaited_once_with(invoice_obj)

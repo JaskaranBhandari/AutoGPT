@@ -27,6 +27,13 @@ vi.mock("@/components/molecules/Toast/use-toast", () => ({
   useToast: () => ({ toast: mockToast }),
 }));
 
+// Mock feature flags — default to payment enabled so button tests work
+let mockPaymentEnabled = true;
+vi.mock("@/services/feature-flags/use-get-flag", () => ({
+  Flag: { ENABLE_PLATFORM_PAYMENT: "enable-platform-payment" },
+  useGetFlag: () => mockPaymentEnabled,
+}));
+
 // Mock generated API hooks
 const mockUseGetSubscriptionStatus = vi.fn();
 const mockUseUpdateSubscriptionTier = vi.fn();
@@ -105,8 +112,8 @@ afterEach(() => {
   mockUseUpdateSubscriptionTier.mockReset();
   mockToast.mockReset();
   mockRouterReplace.mockReset();
-  // Reset search params
   mockSearchParams.delete("subscription");
+  mockPaymentEnabled = true;
 });
 
 describe("SubscriptionTierSection", () => {
@@ -281,6 +288,18 @@ describe("SubscriptionTierSection", () => {
       expect(screen.getByRole("alert")).toBeDefined();
       expect(screen.getByText(/stripe unavailable/i)).toBeDefined();
     });
+  });
+
+  it("hides action buttons when payment flag is disabled", () => {
+    mockPaymentEnabled = false;
+    setupMocks({ subscription: makeSubscription({ tier: "FREE" }) });
+    render(<SubscriptionTierSection />);
+    // Tier cards still visible
+    expect(screen.getByText("Pro")).toBeDefined();
+    expect(screen.getByText("Business")).toBeDefined();
+    // No upgrade/downgrade buttons
+    expect(screen.queryByRole("button", { name: /upgrade/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /downgrade/i })).toBeNull();
   });
 
   it("shows ENTERPRISE message for ENTERPRISE tier users", () => {

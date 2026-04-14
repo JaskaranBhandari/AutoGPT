@@ -1368,7 +1368,7 @@ async def get_subscription_price_id(tier: SubscriptionTier) -> str | None:
     flag = flag_map.get(tier)
     if flag is None:
         return None
-    price_id = await get_feature_flag_value(flag.value, user_id="", default="")
+    price_id = await get_feature_flag_value(flag.value, user_id="system", default="")
     return price_id if isinstance(price_id, str) and price_id else None
 
 
@@ -1597,6 +1597,98 @@ async def sync_subscription_from_stripe(stripe_subscription: dict) -> None:
         # cancel the old sub.
         await _cleanup_stale_subscriptions(customer_id, new_sub_id)
     await set_subscription_tier(user.id, tier)
+
+
+async def handle_subscription_payment_failure(invoice: dict) -> None:
+    """Handle a failed Stripe subscription payment.
+
+    Tries to cover the invoice amount from the user's credit balance.
+    Either way the Stripe subscription is cancelled so Stripe stops retrying.
+
+    - Balance sufficient  → deduct, cancel Stripe sub, keep tier.
+    - Balance insufficient → cancel Stripe sub, downgrade to FREE immediately.
+    """
+    customer_id = invoice.get("customer")
+    if not customer_id:
+        logger.warning(
+            "handle_subscription_payment_failure: missing customer in invoice; skipping"
+        )
+        return
+
+    user = await User.prisma().find_first(where={"stripeCustomerId": customer_id})
+    if not user:
+        logger.warning(
+            "handle_subscription_payment_failure: no user found for customer %s",
+            customer_id,
+        )
+        return
+
+    current_tier = user.subscriptionTier or SubscriptionTier.FREE
+    if current_tier == SubscriptionTier.ENTERPRISE:
+        logger.warning(
+            "handle_subscription_payment_failure: skipping ENTERPRISE user %s"
+            " (customer %s) — tier is admin-managed",
+            user.id,
+            customer_id,
+        )
+        return
+
+    amount_due: int = invoice.get("amount_due", 0)
+    sub_id: str = invoice.get("subscription", "")
+
+    if amount_due <= 0:
+        logger.info(
+            "handle_subscription_payment_failure: amount_due=%d for user %s;"
+            " nothing to deduct",
+            amount_due,
+            user.id,
+        )
+        return
+
+    credit_model = UserCredit()
+    try:
+        await credit_model._add_transaction(
+            user_id=user.id,
+            amount=-amount_due,
+            transaction_type=CreditTransactionType.SUBSCRIPTION,
+            fail_insufficient_credits=True,
+            metadata=SafeJson(
+                {
+                    "stripe_customer_id": customer_id,
+                    "stripe_subscription_id": sub_id,
+                    "reason": "subscription_payment_failure_covered_by_balance",
+                }
+            ),
+        )
+        logger.info(
+            "handle_subscription_payment_failure: deducted %d cents from balance"
+            " for user %s; cancelling Stripe sub %s to prevent further retries",
+            amount_due,
+            user.id,
+            sub_id,
+        )
+    except InsufficientBalanceError:
+        logger.info(
+            "handle_subscription_payment_failure: insufficient balance for user %s;"
+            " downgrading to FREE and cancelling Stripe sub %s",
+            user.id,
+            sub_id,
+        )
+        await set_subscription_tier(user.id, SubscriptionTier.FREE)
+
+    # Cancel the Stripe subscription regardless — if balance covered it we don't
+    # want Stripe to retry next month; if balance was insufficient the user is
+    # already downgraded and the sub must go.
+    try:
+        await _cancel_customer_subscriptions(customer_id)
+    except stripe.StripeError:
+        logger.warning(
+            "handle_subscription_payment_failure: failed to cancel Stripe sub %s"
+            " for user %s (customer %s); Stripe may continue retrying",
+            sub_id,
+            user.id,
+            customer_id,
+        )
 
 
 async def admin_get_user_history(
