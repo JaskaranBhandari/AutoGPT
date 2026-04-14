@@ -18,6 +18,10 @@ const PLATFORM_NAMES: Record<string, string> = {
   LINEAR: "Linear",
 };
 
+// Matches backend's Path validation on /tokens/{token}/... — URL-safe base64
+// characters, bounded length. Keeps malformed params out of proxy fetches.
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
 type LinkState =
   | { status: "loading" }
   | { status: "not-authenticated" }
@@ -29,7 +33,10 @@ type LinkState =
 export default function PlatformLinkPage() {
   const params = useParams();
   const searchParams = useSearchParams();
-  const token = params.token as string;
+  const rawToken = params.token as string;
+  // Defense-in-depth: backend validates with the same regex, but reject
+  // obviously-malformed tokens early so we never construct a bad proxy URL.
+  const token = TOKEN_PATTERN.test(rawToken) ? rawToken : null;
   // Quick fallback: platform may be in ?platform= query param (new links)
   const platformFromUrl =
     PLATFORM_NAMES[searchParams.get("platform")?.toUpperCase() ?? ""] ?? null;
@@ -38,7 +45,14 @@ export default function PlatformLinkPage() {
   const [state, setState] = useState<LinkState>({ status: "loading" });
 
   useEffect(() => {
-    if (!token || isUserLoading) return;
+    if (!token) {
+      setState({
+        status: "error",
+        message: "This setup link is malformed. Ask the bot for a new one.",
+      });
+      return;
+    }
+    if (isUserLoading) return;
 
     if (!user) {
       setState({ status: "not-authenticated" });
@@ -117,7 +131,7 @@ export default function PlatformLinkPage() {
   return (
     <div className="flex h-full min-h-[85vh] flex-col items-center justify-center py-10">
       {state.status === "loading" && <LoadingView />}
-      {state.status === "not-authenticated" && (
+      {state.status === "not-authenticated" && token && (
         <NotAuthenticatedView token={token} />
       )}
       {state.status === "ready" && (
