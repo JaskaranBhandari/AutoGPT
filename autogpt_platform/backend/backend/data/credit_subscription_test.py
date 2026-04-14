@@ -1048,7 +1048,9 @@ async def test_modify_stripe_subscription_for_tier_modifies_existing_sub():
             "backend.data.credit.stripe.Subscription.modify",
         ) as mock_modify,
     ):
-        result = await modify_stripe_subscription_for_tier("user-1", SubscriptionTier.PRO)
+        result = await modify_stripe_subscription_for_tier(
+            "user-1", SubscriptionTier.PRO
+        )
 
     assert result is True
     mock_modify.assert_called_once_with(
@@ -1080,7 +1082,9 @@ async def test_modify_stripe_subscription_for_tier_returns_false_when_no_sub():
             return_value=mock_list,
         ),
     ):
-        result = await modify_stripe_subscription_for_tier("user-1", SubscriptionTier.PRO)
+        result = await modify_stripe_subscription_for_tier(
+            "user-1", SubscriptionTier.PRO
+        )
 
     assert result is False
 
