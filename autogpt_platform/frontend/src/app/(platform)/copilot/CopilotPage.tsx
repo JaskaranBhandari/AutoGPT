@@ -5,7 +5,8 @@ import { useGetV2GetCopilotUsage } from "@/app/api/__generated__/endpoints/chat/
 import { toast } from "@/components/molecules/Toast/use-toast";
 import useCredits from "@/hooks/useCredits";
 import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
-import { UploadSimple } from "@phosphor-icons/react";
+import { Flask, UploadSimple } from "@phosphor-icons/react";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatContainer } from "./components/ChatContainer/ChatContainer";
 import { DeleteChatDialog } from "./components/DeleteChatDialog/DeleteChatDialog";
@@ -16,6 +17,14 @@ import { NotificationDialog } from "./components/NotificationDialog/Notification
 import { RateLimitResetDialog } from "./components/RateLimitResetDialog/RateLimitResetDialog";
 import { ScaleLoader } from "./components/ScaleLoader/ScaleLoader";
 import { useCopilotPage } from "./useCopilotPage";
+
+const ArtifactPanel = dynamic(
+  () =>
+    import("./components/ArtifactPanel/ArtifactPanel").then(
+      (m) => m.ArtifactPanel,
+    ),
+  { ssr: false },
+);
 
 export function CopilotPage() {
   const [isDragging, setIsDragging] = useState(false);
@@ -77,6 +86,10 @@ export function CopilotPage() {
     isUploadingFiles,
     isUserLoading,
     isLoggedIn,
+    // Pagination
+    hasMoreMessages,
+    isLoadingMore,
+    loadMore,
     // Mobile drawer
     isMobile,
     isDrawerOpen,
@@ -97,6 +110,8 @@ export function CopilotPage() {
     // Rate limit reset
     rateLimitMessage,
     dismissRateLimit,
+    // Dry run dev toggle
+    isDryRun,
   } = useCopilotPage();
 
   const {
@@ -113,6 +128,7 @@ export function CopilotPage() {
   const resetCost = usage?.reset_cost;
 
   const isBillingEnabled = useGetFlag(Flag.ENABLE_PLATFORM_PAYMENT);
+  const isArtifactsEnabled = useGetFlag(Flag.ARTIFACTS);
   const { credits, fetchCredits } = useCredits({ fetchInitialCredits: true });
   const hasInsufficientCredits =
     credits !== null && resetCost != null && credits < resetCost;
@@ -151,6 +167,12 @@ export function CopilotPage() {
     >
       {isMobile && <MobileHeader onOpenDrawer={handleOpenDrawer} />}
       <NotificationBanner />
+      {isDryRun && (
+        <div className="flex items-center justify-center gap-1.5 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800">
+          <Flask size={13} weight="bold" />
+          Test mode — new sessions use dry_run=true
+        </div>
+      )}
       {/* Drop overlay */}
       {isDragging && (
         <div className="pointer-events-none absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed border-violet-400 bg-violet-500/10">
@@ -160,26 +182,33 @@ export function CopilotPage() {
           </span>
         </div>
       )}
-      <div className="flex-1 overflow-hidden">
-        <ChatContainer
-          messages={messages}
-          status={status}
-          error={error}
-          sessionId={sessionId}
-          isLoadingSession={isLoadingSession}
-          isSessionError={isSessionError}
-          isCreatingSession={isCreatingSession}
-          isReconnecting={isReconnecting}
-          isSyncing={isSyncing}
-          onCreateSession={createSession}
-          onSend={onSend}
-          onStop={stop}
-          isUploadingFiles={isUploadingFiles}
-          droppedFiles={droppedFiles}
-          onDroppedFilesConsumed={handleDroppedFilesConsumed}
-          historicalDurations={historicalDurations}
-        />
+      <div className="flex flex-1 flex-row overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <ChatContainer
+            messages={messages}
+            status={status}
+            error={error}
+            sessionId={sessionId}
+            isLoadingSession={isLoadingSession}
+            isSessionError={isSessionError}
+            isCreatingSession={isCreatingSession}
+            isReconnecting={isReconnecting}
+            isSyncing={isSyncing}
+            onCreateSession={createSession}
+            onSend={onSend}
+            onStop={stop}
+            isUploadingFiles={isUploadingFiles}
+            hasMoreMessages={hasMoreMessages}
+            isLoadingMore={isLoadingMore}
+            onLoadMore={loadMore}
+            droppedFiles={droppedFiles}
+            onDroppedFilesConsumed={handleDroppedFilesConsumed}
+            historicalDurations={historicalDurations}
+          />
+        </div>
+        {!isMobile && isArtifactsEnabled && <ArtifactPanel />}
       </div>
+      {isMobile && isArtifactsEnabled && <ArtifactPanel mobile />}
       {isMobile && (
         <MobileDrawer
           isOpen={isDrawerOpen}

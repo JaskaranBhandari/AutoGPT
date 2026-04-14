@@ -2,7 +2,8 @@
 
 import { useGetV2GetUserProfile } from "@/app/api/__generated__/endpoints/store/store";
 import { okData } from "@/app/api/helpers";
-import { IconAutoGPTLogo, IconType } from "@/components/__legacy__/ui/icons";
+import { IconType } from "@/components/__legacy__/ui/icons";
+import { AutoGPTLogo } from "@/components/atoms/AutoGPTLogo/AutoGPTLogo";
 import { PreviewBanner } from "@/components/layout/Navbar/components/PreviewBanner/PreviewBanner";
 import { useSidebar } from "@/components/ui/sidebar";
 import { isLogoutInProgress } from "@/lib/autogpt-server-api/helpers";
@@ -10,7 +11,6 @@ import { NAVBAR_HEIGHT_PX } from "@/lib/constants";
 import { useBreakpoint } from "@/lib/hooks/useBreakpoint";
 import { useSupabase } from "@/lib/supabase/hooks/useSupabase";
 import { environment } from "@/services/environment";
-import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
 import { AccountMenu } from "./components/AccountMenu/AccountMenu";
 import { FeedbackButton } from "./components/FeedbackButton";
 import { AgentActivityDropdown } from "./components/AgentActivityDropdown/AgentActivityDropdown";
@@ -27,7 +27,6 @@ export function Navbar() {
   const breakpoint = useBreakpoint();
   const isSmallScreen = breakpoint === "sm" || breakpoint === "base";
   const dynamicMenuItems = getAccountMenuItems(user?.role);
-  const isChatEnabled = useGetFlag(Flag.CHAT);
   const { state: sidebarState } = useSidebar();
   const isSidebarCollapsed = sidebarState === "collapsed";
   const previewBranchName = environment.getPreviewStealingDev();
@@ -47,11 +46,9 @@ export function Navbar() {
 
   const shouldShowPreviewBanner = Boolean(isLoggedIn && previewBranchName);
 
-  const homeHref = isChatEnabled === true ? "/copilot" : "/library";
-
   const actualLoggedInLinks = [
-    { name: "Home", href: homeHref },
-    ...(isChatEnabled === true ? [{ name: "Agents", href: "/library" }] : []),
+    { name: "Home", href: "/copilot" },
+    { name: "Agents", href: "/library" },
     ...loggedInLinks,
   ];
 
@@ -73,7 +70,7 @@ export function Navbar() {
           >
             {isSidebarCollapsed && (
               <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-                <IconAutoGPTLogo className="h-8 w-24" />
+                <AutoGPTLogo className="h-auto w-[4.5rem] md:w-[5.5rem]" />
               </div>
             )}
             {isLoggedIn && !isSmallScreen ? (
