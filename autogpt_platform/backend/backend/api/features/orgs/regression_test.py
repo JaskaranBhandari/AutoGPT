@@ -2018,6 +2018,12 @@ class TestPR15MarketplaceOrg:
             "backend.api.features.store.db.prisma.models.StoreAgent.prisma",
             return_value=self.mock_store_agent_actions,
         )
+        self.mock_org_member_actions = AsyncMock()
+        self.mock_org_member_actions.find_first = AsyncMock(return_value=MagicMock())
+        mocker.patch(
+            "backend.api.features.store.db.prisma.models.OrgMember.prisma",
+            return_value=self.mock_org_member_actions,
+        )
 
     @pytest.mark.asyncio
     async def test_create_submission_sets_owning_org_id(self):
@@ -2098,7 +2104,6 @@ class TestPR15MarketplaceOrg:
         assert listing_create["owningOrgId"] == "org-1"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR15: submission doesn't check org membership")
     async def test_create_submission_requires_org_membership(self):
         """create_store_submission should verify the user is a member of
         the specified organization_id before allowing submission."""
@@ -2115,7 +2120,6 @@ class TestPR15MarketplaceOrg:
         ), "create_store_submission should validate org membership"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR15: edit_submission doesn't verify org ownership")
     async def test_edit_submission_verifies_org_ownership(self):
         """edit_store_submission should accept organization_id and check
         owningOrgId matches it, allowing any org member to edit."""
@@ -2130,7 +2134,6 @@ class TestPR15MarketplaceOrg:
         ), "edit_store_submission should accept organization_id"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR15: my_agents not filtered by org")
     async def test_my_agents_filtered_by_org(self):
         """get_my_agents should accept organization_id and filter by it
         so org members see all agents belonging to the org."""
@@ -2152,7 +2155,6 @@ class TestPR15MarketplaceOrg:
             ), "get_my_agents should accept organization_id"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR15: store agent doesn't resolve org creator")
     async def test_store_agent_resolves_org_creator(self):
         """get_store_agent_details should resolve the creator from the org
         profile when the listing has owningOrgId set."""
@@ -2338,7 +2340,6 @@ class TestPR15MarketplaceOrg:
         assert result is not None
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR15: copy_graph endpoint doesn't exist")
     async def test_copy_graph_to_different_team(self):
         """A copy_graph API endpoint should allow copying a graph to a
         different team within the same org. The endpoint doesn't exist yet."""

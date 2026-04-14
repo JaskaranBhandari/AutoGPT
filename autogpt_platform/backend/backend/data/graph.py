@@ -1564,6 +1564,45 @@ async def fork_graph(
     return graph
 
 
+async def copy_graph(
+    graph_id: str,
+    graph_version: int,
+    user_id: str,
+    *,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    target_team_id: str | None = None,
+) -> GraphModel:
+    """
+    Copies a graph to a (possibly different) team within an org.
+
+    Unlike fork_graph, copy_graph preserves the original graph name
+    and accepts a target_team_id for cross-team copying.
+    """
+    graph = await get_graph(graph_id, graph_version, user_id=user_id, for_export=True)
+    if not graph:
+        raise ValueError(f"Graph {graph_id} v{graph_version} not found")
+
+    graph.forked_from_id = graph.id
+    graph.forked_from_version = graph.version
+    # Preserve the original graph name (no "Copy of" prefix)
+    graph.reassign_ids(user_id=user_id, reassign_graph_id=True)
+    graph.validate_graph(for_run=False)
+
+    dest_team = target_team_id or team_id
+
+    async with transaction() as tx:
+        await __create_graph(
+            tx,
+            graph,
+            user_id,
+            organization_id=organization_id,
+            team_id=dest_team,
+        )
+
+    return graph
+
+
 async def __create_graph(
     tx,
     graph: Graph,
