@@ -734,6 +734,8 @@ async def test_sync_subscription_from_stripe_stale_cancel_errors_swallowed():
 async def test_get_subscription_price_id_pro():
     from backend.data.credit import get_subscription_price_id
 
+    # Clear cached state from other tests to ensure a fresh LD flag lookup.
+    get_subscription_price_id.cache_clear()  # type: ignore[attr-defined]
     with patch(
         "backend.data.credit.get_feature_flag_value",
         new_callable=AsyncMock,
@@ -741,12 +743,14 @@ async def test_get_subscription_price_id_pro():
     ):
         price_id = await get_subscription_price_id(SubscriptionTier.PRO)
         assert price_id == "price_pro_monthly"
+    get_subscription_price_id.cache_clear()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
 async def test_get_subscription_price_id_free_returns_none():
     from backend.data.credit import get_subscription_price_id
 
+    # FREE tier bypasses the LD flag lookup entirely (returns None before fetch).
     price_id = await get_subscription_price_id(SubscriptionTier.FREE)
     assert price_id is None
 
@@ -755,6 +759,7 @@ async def test_get_subscription_price_id_free_returns_none():
 async def test_get_subscription_price_id_empty_flag_returns_none():
     from backend.data.credit import get_subscription_price_id
 
+    get_subscription_price_id.cache_clear()  # type: ignore[attr-defined]
     with patch(
         "backend.data.credit.get_feature_flag_value",
         new_callable=AsyncMock,
@@ -762,6 +767,7 @@ async def test_get_subscription_price_id_empty_flag_returns_none():
     ):
         price_id = await get_subscription_price_id(SubscriptionTier.BUSINESS)
         assert price_id is None
+    get_subscription_price_id.cache_clear()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
