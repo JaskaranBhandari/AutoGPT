@@ -9528,7 +9528,7 @@
         "type": "object",
         "required": ["platform", "platform_user_id", "message"],
         "title": "BotChatRequest",
-        "description": "Request from the bot to send a message on behalf of a platform user.\n\nExactly one of platform_server_id or platform_user_id must be set:\n  - SERVER context: both platform_server_id and platform_user_id set (billed to server owner).\n  - DM context: platform_server_id null and platform_user_id set (billed to the user's account)."
+        "description": "Request from the bot to send a message on behalf of a platform user.\n\nExactly one of (platform_server_id) or () must resolve via context:\n  - SERVER context: both platform_server_id and platform_user_id set.\n    Billed to the server owner; per-user sessions.\n  - DM context: platform_server_id is null, platform_user_id set.\n    Billed to that user's own account."
       },
       "BotChatSessionResponse": {
         "properties": {

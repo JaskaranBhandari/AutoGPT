@@ -299,15 +299,13 @@ class TestCreateLinkTokenEndpoint:
 
         with (
             patch(
-                "backend.api.features.platform_linking.routes.PlatformLink"
-            ) as mock_link_model,
+                "backend.api.features.platform_linking.routes.find_server_link",
+                new=AsyncMock(return_value=None),
+            ),
             patch(
                 "backend.api.features.platform_linking.routes.PlatformLinkToken"
             ) as mock_token_model,
         ):
-            mock_link_model.prisma.return_value.find_first = AsyncMock(
-                return_value=None
-            )
             mock_token_model.prisma.return_value.update_many = AsyncMock(return_value=0)
             mock_token_model.prisma.return_value.create = AsyncMock(
                 return_value=MagicMock()
@@ -334,12 +332,9 @@ class TestCreateLinkTokenEndpoint:
         from backend.api.features.platform_linking.routes import create_link_token
 
         with patch(
-            "backend.api.features.platform_linking.routes.PlatformLink"
-        ) as mock_link_model:
-            mock_link_model.prisma.return_value.find_first = AsyncMock(
-                return_value=MagicMock()  # server is already linked
-            )
-
+            "backend.api.features.platform_linking.routes.find_server_link",
+            new=AsyncMock(return_value=MagicMock()),  # server is already linked
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await create_link_token(
                     CreateLinkTokenRequest(
