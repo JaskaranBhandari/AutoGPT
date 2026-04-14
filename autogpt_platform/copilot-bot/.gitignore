@@ -2,3 +2,8 @@ node_modules/
 dist/
 .env
 *.log
+
+# Root .gitignore blocks package-lock.json globally (repo uses pnpm).
+# Bot uses npm for the Chat SDK ecosystem — we want the lockfile for
+# reproducible builds.
+!package-lock.json

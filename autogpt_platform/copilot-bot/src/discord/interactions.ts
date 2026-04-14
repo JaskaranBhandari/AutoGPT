@@ -195,7 +195,19 @@ async function dispatch(
       return;
     }
     default:
+      // Autocomplete (4) and anything else — always respond so Discord
+      // doesn't show "application did not respond" to the invoker.
       console.warn(`[bot] Unhandled interaction type: ${interaction.type}`);
+      await ctx
+        .respond("This interaction type isn't supported yet.", {
+          ephemeral: true,
+        })
+        .catch((err) =>
+          console.error(
+            "[bot] Failed to respond to unhandled interaction:",
+            err,
+          ),
+        );
   }
 }
 

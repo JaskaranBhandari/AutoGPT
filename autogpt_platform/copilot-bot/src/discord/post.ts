@@ -11,15 +11,22 @@ import type { Component } from "./types.js";
 const DISCORD_API = "https://discord.com/api/v10";
 
 /**
- * Extract the Discord channel ID from a thread ID.
+ * Extract the Discord channel/thread ID from a Chat SDK thread ID.
  * Thread ID format: "discord:{guildId}:{channelId}[:{threadId}]"
- * We post to the deepest segment available — so in a thread we post to the
- * thread, not the parent channel.
+ * Posts to the deepest segment — so in a Discord thread we post to the thread,
+ * not the parent channel.
+ *
+ * Throws if the thread ID doesn't start with "discord:" — a format change in
+ * the Chat SDK would otherwise silently route messages to the wrong channel.
  */
 export function discordPostTarget(threadId: string): string {
   const parts = threadId.split(":");
-  // Format: discord:guild:channel[:thread]
-  return parts[3] ?? parts[2] ?? parts[1] ?? parts[0];
+  if (parts[0] !== "discord" || parts.length < 3) {
+    throw new Error(
+      `Unexpected Discord thread ID format: "${threadId}" (expected "discord:guild:channel[:thread]")`,
+    );
+  }
+  return parts[3] ?? parts[2];
 }
 
 /**

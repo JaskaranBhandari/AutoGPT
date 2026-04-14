@@ -72,7 +72,9 @@ const HELP_TEXT =
 async function handleUnlink(ctx: InteractionContext): Promise<void> {
   // Unlinking requires JWT auth on the backend. Punt to the settings page
   // where the user can review all their linked servers and remove them.
-  const settingsUrl = "https://platform.agpt.co/profile/settings";
+  const base =
+    process.env.AUTOGPT_FRONTEND_URL ?? "https://platform.agpt.co";
+  const settingsUrl = `${base.replace(/\/$/, "")}/profile/settings`;
   await ctx.respond(
     `To unlink servers, manage them in your AutoGPT settings:\n${settingsUrl}\n\nYou can see all servers billed to your account there and remove any of them.`,
     { ephemeral: true },
