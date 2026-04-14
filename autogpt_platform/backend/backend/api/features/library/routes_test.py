@@ -115,7 +115,7 @@ async def test_get_library_agents_success(
         page_size=15,
         folder_id=None,
         include_root_only=False,
-        is_hidden=False,
+        is_hidden=None,
     )
 
 

@@ -52,7 +52,7 @@ async def list_library_agents(
     include_executions: bool = False,
     folder_id: Optional[str] = None,
     include_root_only: bool = False,
-    is_hidden: Optional[bool] = False,
+    is_hidden: Optional[bool] = None,
 ) -> library_model.LibraryAgentResponse:
     """
     Retrieves a paginated list of LibraryAgent records for a given user.

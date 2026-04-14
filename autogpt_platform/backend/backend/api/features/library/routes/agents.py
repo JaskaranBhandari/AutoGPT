@@ -50,8 +50,11 @@ async def list_library_agents(
         description="Only return agents without a folder (root-level agents)",
     ),
     is_hidden: Optional[bool] = Query(
-        False,
-        description="Filter by `is_hidden` attribute",
+        None,
+        description=(
+            "Filter by hidden status. True = only hidden, "
+            "False = only non-hidden, omit = all agents."
+        ),
     ),
 ) -> library_model.LibraryAgentResponse:
     """

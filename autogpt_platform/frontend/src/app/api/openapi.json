@@ -4276,11 +4276,10 @@
             "required": false,
             "schema": {
               "anyOf": [{ "type": "boolean" }, { "type": "null" }],
-              "description": "Filter by `is_hidden` attribute",
-              "default": false,
+              "description": "Filter by hidden status. True = only hidden, False = only non-hidden, omit = all agents.",
               "title": "Is Hidden"
             },
-            "description": "Filter by `is_hidden` attribute"
+            "description": "Filter by hidden status. True = only hidden, False = only non-hidden, omit = all agents."
           }
         ],
         "responses": {
