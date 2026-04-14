@@ -480,6 +480,7 @@ async def create_library_agent(
                         "update": {
                             "isDeleted": False,
                             "isArchived": False,
+                            "isHidden": is_hidden,
                             "useGraphIsActiveVersion": True,
                             "settings": SafeJson(
                                 GraphSettings.from_graph(
@@ -1903,8 +1904,6 @@ async def fork_library_agent(
 
 # ── Trigger agents ──────────────────────────────────────────────────
 
-# AgentExecutorBlock ID — used to detect which hidden agents reference
-# a given parent graph as a sub-agent (i.e. are triggers for it).
 _AGENT_EXECUTOR_BLOCK_ID = "e189baac-8c20-45a1-94a7-55177ea42565"
 
 
