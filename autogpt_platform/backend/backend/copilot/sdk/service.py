@@ -2172,13 +2172,15 @@ async def stream_chat_completion_sdk(
             + graphiti_supplement
         )
 
-        # Warm context: pre-load relevant facts from Graphiti on first turn
+        # Warm context: pre-load relevant facts from Graphiti on first turn.
+        # Stored here and injected into the first user message (not the system
+        # prompt) so the system prompt stays identical across all users and
+        # sessions, enabling cross-session Anthropic prompt-cache hits.
+        warm_ctx = ""
         if graphiti_enabled and user_id and len(session.messages) <= 1:
             from backend.copilot.graphiti.context import fetch_warm_context
 
-            warm_ctx = await fetch_warm_context(user_id, message or "")
-            if warm_ctx:
-                system_prompt += f"\n\n{warm_ctx}"
+            warm_ctx = await fetch_warm_context(user_id, message or "") or ""
 
         # Process transcript download result and restore CLI native session.
         # The CLI native session file (uploaded after each turn) is the
@@ -2434,11 +2436,19 @@ async def stream_chat_completion_sdk(
         # cache it across sessions.
         #
         # On resume (has_history=True) we intentionally skip re-injection: the
-        # transcript already contains the <user_context> prefix from the original
-        # turn (persisted to the DB in inject_user_context), so the SDK replay
-        # carries context continuity without us prepending it again.  Adding it
-        # a second time would duplicate the block and inflate tokens.
+        # transcript already contains the <user_context> and <memory_context>
+        # prefixes from the original turn (persisted to the DB via
+        # inject_user_context), so the SDK replay carries context continuity
+        # without us prepending them again.
         if not has_history:
+            # Prepend Graphiti warm context as a trusted <memory_context> block
+            # so it reaches the LLM without polluting the (cached) system prompt.
+            # inject_user_context will persist the full prefixed message to DB.
+            if warm_ctx:
+                current_message = (
+                    f"<memory_context>\n{warm_ctx}\n</memory_context>\n\n"
+                    + current_message
+                )
             prefixed_message = await inject_user_context(
                 understanding, current_message, session_id, session.messages
             )

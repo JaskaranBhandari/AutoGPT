@@ -331,6 +331,9 @@ def _generate_tool_documentation() -> str:
     return docs
 
 
+_LOCAL_STORAGE_SUPPLEMENT: str | None = None
+
+
 def get_sdk_supplement(use_e2b: bool, cwd: str = "") -> str:
     """Get the supplement for SDK mode (Claude Agent SDK).
 
@@ -338,16 +341,31 @@ def get_sdk_supplement(use_e2b: bool, cwd: str = "") -> str:
     receives tool schemas from the SDK. Only includes technical notes about
     storage systems and execution environment.
 
+    The system prompt must be **identical across all sessions and users** to
+    enable cross-session LLM prompt-cache hits (Anthropic caches on exact
+    content). To preserve this invariant, the local-mode supplement uses a
+    generic placeholder for the working directory instead of the real
+    session-specific UUID path. The actual ``cwd`` is passed to the CLI
+    subprocess via ``ClaudeAgentOptions.cwd`` so the model's shell commands
+    land in the right directory; the model can run ``pwd`` to confirm the
+    exact path.
+
     Args:
         use_e2b: Whether E2B cloud sandbox is being used
-        cwd: Current working directory (only used in local_storage mode)
+        cwd: Unused — kept for call-site compatibility.
 
     Returns:
         The supplement string to append to the system prompt
     """
+    del cwd  # intentionally unused — see docstring
     if use_e2b:
         return _get_cloud_sandbox_supplement()
-    return _get_local_storage_supplement(cwd)
+    global _LOCAL_STORAGE_SUPPLEMENT
+    if _LOCAL_STORAGE_SUPPLEMENT is None:
+        _LOCAL_STORAGE_SUPPLEMENT = _get_local_storage_supplement(
+            "/tmp/copilot-<session-id>"
+        )
+    return _LOCAL_STORAGE_SUPPLEMENT
 
 
 def get_graphiti_supplement() -> str:
