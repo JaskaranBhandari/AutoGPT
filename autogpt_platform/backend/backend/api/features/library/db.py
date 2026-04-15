@@ -17,7 +17,7 @@ from backend.api.features.library.exceptions import (
     FolderValidationError,
 )
 from backend.data.db import transaction
-from backend.data.execution import get_graph_execution, get_graph_executions_count
+from backend.data.execution import get_graph_execution
 from backend.data.graph import GraphSettings
 from backend.data.includes import (
     AGENT_PRESET_INCLUDE,
@@ -44,16 +44,22 @@ integration_creds_manager = IntegrationCredentialsManager()
 
 
 async def _fetch_execution_counts(user_id: str, graph_ids: list[str]) -> dict[str, int]:
-    """Fetch execution counts per graph for the current user."""
+    """Fetch execution counts per graph in a single batched query."""
     if not graph_ids:
         return {}
-    counts = await asyncio.gather(
-        *[
-            get_graph_executions_count(user_id=user_id, graph_id=gid)
-            for gid in graph_ids
-        ]
+    rows = await prisma.models.AgentGraphExecution.prisma().group_by(
+        by=["agentGraphId"],
+        where={
+            "userId": user_id,
+            "agentGraphId": {"in": graph_ids},
+            "isDeleted": False,
+        },
+        count=True,
     )
-    return dict(zip(graph_ids, counts))
+    return {
+        row["agentGraphId"]: int((row.get("_count") or {}).get("_all") or 0)
+        for row in rows
+    }
 
 
 async def list_library_agents(
