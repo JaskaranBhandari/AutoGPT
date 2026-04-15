@@ -261,10 +261,11 @@ class ReducedContext(NamedTuple):
     resume_file: str | None
     transcript_lost: bool
     tried_compaction: bool
-    # Maximum number of DB messages to use in the _format_conversation_context
-    # fallback.  None means "use all".  Decreases on each retry attempt to
-    # prevent prompt-too-long cascades when there is no --resume.
-    max_fallback_messages: int | None = None
+    # Token budget for history compression on the DB-message fallback path.
+    # None means "use model-aware default".  Halved on each retry so
+    # compress_context applies progressively more aggressive reduction
+    # (LLM summarize → content truncate → middle-out delete → first/last trim).
+    target_tokens: int | None = None
 
 
 @dataclass
@@ -309,9 +310,10 @@ class _RetryState:
     adapter: SDKResponseAdapter
     transcript_builder: TranscriptBuilder
     usage: _TokenUsage
-    # Limits DB-message fallback size on retries to prevent prompt-too-long
-    # cascades on large sessions without --resume.  None = use all messages.
-    max_fallback_messages: int | None = None
+    # Token budget for history compression on retries (DB-message fallback path).
+    # None = model-aware default.  Halved each retry for progressively more
+    # aggressive compression (LLM summarize → truncate → middle-out → trim).
+    target_tokens: int | None = None
 
 
 @dataclass
@@ -343,13 +345,14 @@ class _StreamContext:
     lock: AsyncClusterLock
 
 
-# Per-retry fallback message limits for the no-transcript (use_resume=False)
-# path.  When there is no CLI native session to --resume, context is built
-# from DB messages via _format_conversation_context.  For large sessions this
-# text can exceed the model's context window; each retry attempt reduces the
-# number of messages included to prevent a cascading prompt-too-long failure.
-# Index 0 = first retry, 1 = second retry, higher = last value.
-_FALLBACK_MSG_LIMITS: tuple[int, ...] = (40, 10)
+# Per-retry token budgets for the no-transcript (use_resume=False) path.
+# When there is no CLI native session to --resume, context is built from DB
+# messages via _format_conversation_context.  For large sessions this text
+# can exceed the model context window; each retry halves the token budget so
+# compress_context applies progressively more aggressive reduction:
+#   LLM summarize → content truncate → middle-out delete → first/last trim.
+# Index 0 = first retry, 1 = second retry; last value applies beyond that.
+_RETRY_TARGET_TOKENS: tuple[int, ...] = (50_000, 15_000)
 
 
 async def _reduce_context(
@@ -367,16 +370,17 @@ async def _reduce_context(
     entirely so the query is rebuilt from DB messages only.
 
     When no transcript is available (use_resume=False fallback path), returns
-    a decreasing ``max_fallback_messages`` limit to prevent prompt-too-long
-    cascades on large sessions: 40 messages on the first retry, 10 on the
-    second.  The limit applies in `_build_query_message`.
+    a decreasing ``target_tokens`` budget so ``compress_context`` applies
+    progressively more aggressive reduction (LLM summarize → content truncate
+    → middle-out delete → first/last trim).  The budget applies in
+    ``_build_query_message`` and is halved on each retry.
 
-    `transcript_lost` is True when the transcript was dropped (caller
-    should set `skip_transcript_upload`).
+    ``transcript_lost`` is True when the transcript was dropped (caller
+    should set ``skip_transcript_upload``).
     """
-    # Max messages for the DB fallback on this attempt (no-transcript path).
+    # Token budget for the DB fallback on this attempt (no-transcript path).
     idx = max(0, attempt - 1)
-    max_fb = _FALLBACK_MSG_LIMITS[min(idx, len(_FALLBACK_MSG_LIMITS) - 1)]
+    retry_target = _RETRY_TARGET_TOKENS[min(idx, len(_RETRY_TARGET_TOKENS) - 1)]
 
     # First retry: try compacting our transcript builder state.
     # Note: the CLI native --resume file is not updated with the compacted
@@ -402,14 +406,13 @@ async def _reduce_context(
         logger.warning("%s Compaction failed, dropping transcript", log_prefix)
 
     # Subsequent retry or compaction failed: drop transcript entirely.
-    # Return max_fb so the caller limits DB-message fallback size.
+    # Return retry_target so the caller compresses DB messages to that budget.
     logger.warning(
-        "%s Dropping transcript, rebuilding from DB messages"
-        " (max_fallback_messages=%d)",
+        "%s Dropping transcript, rebuilding from DB messages" " (target_tokens=%d)",
         log_prefix,
-        max_fb,
+        retry_target,
     )
-    return ReducedContext(TranscriptBuilder(), False, None, True, True, max_fb)
+    return ReducedContext(TranscriptBuilder(), False, None, True, True, retry_target)
 
 
 def _append_error_marker(
@@ -862,6 +865,7 @@ def _format_sdk_content_blocks(blocks: list) -> list[dict[str, Any]]:
 
 async def _compress_messages(
     messages: list[ChatMessage],
+    target_tokens: int | None = None,
 ) -> tuple[list[ChatMessage], bool]:
     """Compress a list of messages if they exceed the token threshold.
 
@@ -869,6 +873,10 @@ async def _compress_messages(
     the "try LLM, fallback to truncation" pattern with timeouts.  Both
     `_compress_messages` and `compact_transcript` share this helper so
     client acquisition and error handling are consistent.
+
+    ``target_tokens`` sets a hard ceiling for the compressed output so
+    callers can enforce a tighter budget on retries.  When ``None``,
+    ``compress_context`` uses the model-aware default.
 
     See also:
         `_run_compression` — shared compression with timeout guards.
@@ -893,7 +901,9 @@ async def _compress_messages(
         messages_dict.append(msg_dict)
 
     try:
-        result = await _run_compression(messages_dict, config.model, "[SDK]")
+        result = await _run_compression(
+            messages_dict, config.model, "[SDK]", target_tokens=target_tokens
+        )
     except Exception as exc:
         # Guard against timeouts or unexpected errors in compression —
         # return the original messages so the caller can proceed without
@@ -1022,43 +1032,45 @@ async def _build_query_message(
     use_resume: bool,
     transcript_msg_count: int,
     session_id: str,
-    max_fallback_messages: int | None = None,
+    target_tokens: int | None = None,
 ) -> tuple[str, bool]:
     """Build the query message with appropriate context.
 
     When ``use_resume=True``, the CLI has the full session via ``--resume``;
     only a gap-fill prefix is injected when the transcript is stale.
 
-    When ``use_resume=False``, context is built from DB messages.  Two sub-
-    paths exist:
+    When ``use_resume=False``, context is built from DB messages via
+    ``_format_conversation_context``.  Three sub-paths:
 
-    * ``transcript_msg_count > 0`` — a compressed custom transcript was
-      downloaded (or seeded) but the CLI native session could not be restored.
-      Only the gap since the transcript end is injected (small).
-    * ``transcript_msg_count == 0`` — no prior context at all.  The most
-      recent ``max_fallback_messages`` DB messages are compressed and injected.
-      ``max_fallback_messages`` decreases on each retry attempt to prevent
-      prompt-too-long cascades on large sessions.
+    * Transcript covers a prefix AND a gap exists — inject compressed gap
+      (efficient: only new messages since the transcript end).
+    * Transcript covers everything OR no transcript — inject the full prior
+      session compressed to ``target_tokens``.  ``compress_context`` handles
+      size reduction internally via LLM summarize → content truncate →
+      middle-out delete → first/last trim, so no message-count cap is needed.
+    * ``target_tokens`` decreases on each retry to force progressively more
+      aggressive compression when the first attempt exceeds context limits.
 
     Returns:
         Tuple of (query_message, was_compacted).
     """
     msg_count = len(session.messages)
+    prior = session.messages[:-1]  # all turns except the current user message
 
     logger.info(
         "[SDK] [%s] Context path: use_resume=%s, transcript_msg_count=%d,"
-        " db_msg_count=%d, max_fallback=%s",
+        " db_msg_count=%d, target_tokens=%s",
         session_id[:8],
         use_resume,
         transcript_msg_count,
         msg_count,
-        max_fallback_messages,
+        target_tokens,
     )
 
     if use_resume and transcript_msg_count > 0:
         if transcript_msg_count < msg_count - 1:
-            gap = session.messages[transcript_msg_count:-1]
-            compressed, was_compressed = await _compress_messages(gap)
+            gap = prior[transcript_msg_count:]
+            compressed, was_compressed = await _compress_messages(gap, target_tokens)
             gap_context = _format_conversation_context(compressed)
             if gap_context:
                 logger.info(
@@ -1079,15 +1091,18 @@ async def _build_query_message(
             session_id[:8],
             transcript_msg_count,
         )
+        return current_message, False
+
     elif not use_resume and msg_count > 1:
         if transcript_msg_count > 0:
             # A compressed transcript exists (downloaded or seeded from DB)
-            # but the CLI native session was unavailable.  Inject only the
-            # gap since the transcript end — far smaller than a full-session
-            # compression for large sessions.
-            gap = session.messages[transcript_msg_count:-1]
+            # but the CLI native session was unavailable.  Try gap-only first
+            # (efficient: only inject new messages since the transcript end).
+            gap = prior[transcript_msg_count:]
             if gap:
-                compressed, was_compressed = await _compress_messages(gap)
+                compressed, was_compressed = await _compress_messages(
+                    gap, target_tokens
+                )
                 gap_context = _format_conversation_context(compressed)
                 if gap_context:
                     logger.info(
@@ -1101,49 +1116,44 @@ async def _build_query_message(
                         f"{gap_context}\n\nNow, the user says:\n{current_message}",
                         was_compressed,
                     )
-            # Gap empty or produced no context — send message alone.
+            # Gap empty — transcript is current but we have no --resume.
+            # Fall through to compress full session so the model has context.
             logger.info(
-                "[SDK] [%s] Transcript-aware fallback: gap empty, no prefix",
+                "[SDK] [%s] Transcript-aware fallback: gap empty,"
+                " compressing full session for context injection",
                 session_id[:8],
             )
-        else:
-            # No transcript at all — compress recent DB messages.
-            logger.warning(
-                "[SDK] [%s] No --resume for %d-message session — using"
-                " compression fallback (pod affinity issue or first turn after"
-                " restore failure); max_fallback=%s",
+
+        # No transcript at all, OR gap was empty: compress full prior session.
+        # compress_context handles size reduction internally (LLM summarize →
+        # content truncate → middle-out delete → first/last trim).
+        logger.warning(
+            "[SDK] [%s] No --resume for %d-message session — compressing"
+            " full session history (pod affinity issue or first turn after"
+            " restore failure); target_tokens=%s",
+            session_id[:8],
+            msg_count,
+            target_tokens,
+        )
+        compressed, was_compressed = await _compress_messages(prior, target_tokens)
+        history_context = _format_conversation_context(compressed)
+        if history_context:
+            logger.info(
+                "[SDK] [%s] Fallback context built: compressed=%s," " context_bytes=%d",
                 session_id[:8],
-                msg_count,
-                max_fallback_messages,
+                was_compressed,
+                len(history_context),
             )
-            prior = session.messages[:-1]
-            if max_fallback_messages is not None:
-                prior = prior[-max_fallback_messages:]
-                logger.info(
-                    "[SDK] [%s] Fallback limited to last %d messages",
-                    session_id[:8],
-                    len(prior),
-                )
-            compressed, was_compressed = await _compress_messages(prior)
-            history_context = _format_conversation_context(compressed)
-            if history_context:
-                logger.info(
-                    "[SDK] [%s] Fallback context built: compressed=%s,"
-                    " context_bytes=%d",
-                    session_id[:8],
-                    was_compressed,
-                    len(history_context),
-                )
-                return (
-                    f"{history_context}\n\nNow, the user says:\n{current_message}",
-                    was_compressed,
-                )
-            logger.warning(
-                "[SDK] [%s] Fallback context empty after compression"
-                " (%d messages) — sending message without history",
-                session_id[:8],
-                len(prior),
+            return (
+                f"{history_context}\n\nNow, the user says:\n{current_message}",
+                was_compressed,
             )
+        logger.warning(
+            "[SDK] [%s] Fallback context empty after compression"
+            " (%d messages) — sending message without history",
+            session_id[:8],
+            len(prior),
+        )
 
     return current_message, False
 
@@ -2594,9 +2604,17 @@ async def stream_chat_completion_sdk(
         # (inject only new messages) instead of re-compressing the full DB
         # history, and (b) a restored CLI session on the next pod gets a
         # usable compact base even for sessions that started on old pods.
-        if not use_resume and not transcript_content and len(session.messages) > 1:
+        # Seeding only makes sense when transcripts will actually be uploaded.
+        # Use a tight token budget (30K) so the seeded JSONL stays compact.
+        _SEED_TARGET_TOKENS = 30_000
+        if (
+            not use_resume
+            and not transcript_content
+            and not skip_transcript_upload
+            and len(session.messages) > 1
+        ):
             _prior = session.messages[:-1]
-            _comp, _ = await _compress_messages(_prior)
+            _comp, _ = await _compress_messages(_prior, _SEED_TARGET_TOKENS)
             if _comp:
                 _seeded = _session_messages_to_transcript(_comp)
                 if _seeded and validate_transcript(_seeded):
@@ -2606,9 +2624,10 @@ async def stream_chat_completion_sdk(
                     transcript_msg_count = len(_comp)
                     logger.info(
                         "%s Seeded transcript from %d compressed DB messages"
-                        " for next-turn upload",
+                        " for next-turn upload (seed_target_tokens=%d)",
                         log_prefix,
                         len(_comp),
+                        _SEED_TARGET_TOKENS,
                     )
 
         tried_compaction = False
@@ -2700,7 +2719,7 @@ async def stream_chat_completion_sdk(
                 state.resume_file = ctx.resume_file
                 tried_compaction = ctx.tried_compaction
                 state.transcript_msg_count = 0
-                state.max_fallback_messages = ctx.max_fallback_messages
+                state.target_tokens = ctx.target_tokens
                 if ctx.transcript_lost:
                     skip_transcript_upload = True
 
@@ -2737,7 +2756,7 @@ async def stream_chat_completion_sdk(
                     state.use_resume,
                     state.transcript_msg_count,
                     session_id,
-                    max_fallback_messages=state.max_fallback_messages,
+                    target_tokens=state.target_tokens,
                 )
                 if attachments.hint:
                     state.query_message = f"{state.query_message}\n\n{attachments.hint}"
