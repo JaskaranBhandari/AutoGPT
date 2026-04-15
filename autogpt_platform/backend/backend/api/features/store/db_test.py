@@ -405,10 +405,12 @@ async def test_get_store_creators_only_returns_approved(mocker):
             name="Creator One",
             username="creator1",
             description="desc",
+            links=["link1"],
             avatar_url="avatar.jpg",
             num_agents=1,
             agent_rating=4.5,
             agent_runs=10,
+            top_categories=["test"],
             is_featured=False,
         )
     ]
@@ -427,5 +429,5 @@ async def test_get_store_creators_only_returns_approved(mocker):
 
     _, find_kwargs = mock_creator.return_value.find_many.call_args
     _, count_kwargs = mock_creator.return_value.count.call_args
-    assert find_kwargs["where"].num_agents == {"gt": 0}
-    assert count_kwargs["where"].num_agents == {"gt": 0}
+    assert find_kwargs["where"]["num_agents"] == {"gt": 0}
+    assert count_kwargs["where"]["num_agents"] == {"gt": 0}
