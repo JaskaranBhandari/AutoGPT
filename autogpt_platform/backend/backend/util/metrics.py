@@ -172,17 +172,21 @@ def sentry_capture_error(error: BaseException):
     _sentry_flush()
 
 
+def _default_environment() -> str:
+    return (
+        f"app:{settings.config.app_env.value}-behave:{settings.config.behave_as.value}"
+    )
+
+
 class AllQuietAlert(BaseModel):
-    severity: Literal["warning"] | Literal["critical"] | Literal["minor"]
-    status: Literal["resolved"] | Literal["open"]
+    severity: Literal["warning", "critical", "minor"]
+    status: Literal["resolved", "open"]
     title: str | None = None
     description: str | None = None
     correlation_id: str | None = None
-    channel: str | None = None  # Discord channel (platform or product)
+    channel: str | None = None
     extra_attributes: dict[str, str] = Field(default_factory=dict)
-    environment: str = (
-        f"app:{settings.config.app_env.value}-behave:{settings.config.behave_as.value}"
-    )
+    environment: str = Field(default_factory=_default_environment)
 
 
 async def send_allquiet_alert(alert: AllQuietAlert):
@@ -194,7 +198,10 @@ async def send_allquiet_alert(alert: AllQuietAlert):
 
     from backend.util.request import Requests
 
-    await Requests().post(hook_url, json=alert.model_dump())
+    try:
+        await Requests().post(hook_url, json=alert.model_dump())
+    except Exception:
+        logging.exception("Failed to POST AllQuiet alert")
 
 
 async def discord_send_alert(

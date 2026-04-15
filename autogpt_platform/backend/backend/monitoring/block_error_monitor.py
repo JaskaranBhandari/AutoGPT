@@ -1,5 +1,6 @@
 """Block error rate monitoring module."""
 
+import hashlib
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -76,17 +77,16 @@ class BlockErrorMonitor:
             if critical_alerts:
                 msg = "Block Error Rate Alert:\n\n" + "\n\n".join(critical_alerts)
 
-                # Send alert with correlation ID for block errors
-                # We'll create a simple hash of the block IDs that have errors
-                blocks_with_errors = [
+                blocks_with_errors = sorted(
                     stats.block_id
                     for name, stats in block_stats.items()
                     if stats.total_executions >= 10
                     and stats.error_rate >= threshold * 100
-                ]
-                correlation_id = (
-                    f"block_errors_{len(blocks_with_errors)}_blocks_{end_time.date()}"
                 )
+                blocks_hash = hashlib.md5(
+                    ",".join(blocks_with_errors).encode()
+                ).hexdigest()[:8]
+                correlation_id = f"block_errors_{blocks_hash}_{end_time.date()}"
 
                 self.notification_client.system_alert(
                     content=msg,

@@ -7,8 +7,33 @@ import pytest
 from prisma.enums import NotificationType
 
 from backend.data.notifications import AgentRunData, NotificationEventModel
-from backend.notifications.notifications import NotificationManager
+from backend.notifications.notifications import (
+    NotificationManager,
+    _extract_clean_title,
+)
 from backend.util.metrics import DiscordChannel
+
+
+class TestExtractCleanTitle:
+    def test_strips_markdown_bold(self):
+        assert _extract_clean_title("**Alert Title**\nBody") == "Alert Title"
+
+    def test_strips_emoji(self):
+        assert _extract_clean_title("🚨 Alert Title") == "Alert Title"
+
+    def test_strips_mixed_emoji_and_markdown(self):
+        result = _extract_clean_title("❌ **Insufficient Funds Alert**\nUser: x")
+        assert result == "Insufficient Funds Alert"
+
+    def test_truncates_at_max_length(self):
+        long = "A" * 200
+        assert len(_extract_clean_title(long, max_length=50)) == 50
+
+    def test_uses_first_line(self):
+        assert _extract_clean_title("First\nSecond\nThird") == "First"
+
+    def test_empty_string(self):
+        assert _extract_clean_title("") == ""
 
 
 class TestNotificationErrorHandling:
@@ -197,6 +222,27 @@ class TestNotificationErrorHandling:
         assert alert.severity == "critical"
         assert alert.channel == DiscordChannel.PRODUCT.value
         assert alert.extra_attributes == {"key": "value"}
+
+    @pytest.mark.asyncio
+    async def test_system_alert_sends_allquiet_even_if_discord_fails(
+        self, notification_manager
+    ):
+        with patch(
+            "backend.notifications.notifications.discord_send_alert",
+            new_callable=AsyncMock,
+            side_effect=Exception("Discord down"),
+        ), patch(
+            "backend.notifications.notifications.send_allquiet_alert",
+            new_callable=AsyncMock,
+        ) as mock_send_allquiet_alert:
+            with pytest.raises(Exception, match="Discord down"):
+                await notification_manager.system_alert(
+                    content="🚨 **Alert**\nDetails",
+                    correlation_id="fail-test",
+                    severity="critical",
+                )
+
+        mock_send_allquiet_alert.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_system_alert_skips_allquiet_without_correlation_id(
