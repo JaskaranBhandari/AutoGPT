@@ -131,11 +131,11 @@ interface CopilotUIState {
   goBackArtifact: () => void;
 
   /** Autopilot mode: 'extended_thinking' (default) or 'fast'. */
-  copilotMode: CopilotMode;
-  setCopilotMode: (mode: CopilotMode) => void;
+  copilotChatMode: CopilotMode;
+  setCopilotChatMode: (mode: CopilotMode) => void;
 
   /** Model tier: 'standard' (default) or 'advanced' (highest-capability). */
-  copilotModel: CopilotLlmModel;
+  copilotLlmModel: CopilotLlmModel;
   setCopilotLlmModel: (model: CopilotLlmModel) => void;
 
   /** Developer dry-run mode: sessions created with dry_run=true. */
@@ -282,18 +282,18 @@ export const useCopilotUIStore = create<CopilotUIState>((set) => ({
       };
     }),
 
-  copilotMode: "extended_thinking",
-  setCopilotMode: (mode) => {
-    set({ copilotMode: mode });
+  copilotChatMode: "extended_thinking",
+  setCopilotChatMode: (mode) => {
+    set({ copilotChatMode: mode });
   },
 
-  copilotModel: (() => {
+  copilotLlmModel: (() => {
     const saved = isClient ? storage.get(Key.COPILOT_MODEL) : null;
     return saved === "advanced" ? "advanced" : "standard";
   })(),
   setCopilotLlmModel: (model) => {
     storage.set(Key.COPILOT_MODEL, model);
-    set({ copilotModel: model });
+    set({ copilotLlmModel: model });
   },
 
   isDryRun: isClient && storage.get(Key.COPILOT_DRY_RUN) === "true",
@@ -328,8 +328,8 @@ export const useCopilotUIStore = create<CopilotUIState>((set) => ({
         activeArtifact: null,
         history: [],
       },
-      copilotMode: "extended_thinking",
-      copilotModel: "standard",
+      copilotChatMode: "extended_thinking",
+      copilotLlmModel: "standard",
       isDryRun: false,
     });
     if (isClient) {

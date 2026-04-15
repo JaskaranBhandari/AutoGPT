@@ -52,9 +52,9 @@ export function ChatInput({
   hasSession = false,
 }: Props) {
   const {
-    copilotMode,
-    setCopilotMode,
-    copilotModel,
+    copilotChatMode,
+    setCopilotChatMode,
+    copilotLlmModel,
     setCopilotLlmModel,
     isDryRun,
     setIsDryRun,
@@ -65,8 +65,8 @@ export function ChatInput({
 
   function handleToggleMode() {
     const next =
-      copilotMode === "extended_thinking" ? "fast" : "extended_thinking";
-    setCopilotMode(next);
+      copilotChatMode === "extended_thinking" ? "fast" : "extended_thinking";
+    setCopilotChatMode(next);
     toast({
       title:
         next === "fast"
@@ -80,7 +80,7 @@ export function ChatInput({
   }
 
   function handleToggleModel() {
-    const next = copilotModel === "advanced" ? "standard" : "advanced";
+    const next = copilotLlmModel === "advanced" ? "standard" : "advanced";
     setCopilotLlmModel(next);
     toast({
       title:
@@ -220,13 +220,13 @@ export function ChatInput({
             />
             {showModeToggle && !isStreaming && (
               <ModeToggleButton
-                mode={copilotMode}
+                mode={copilotChatMode}
                 onToggle={handleToggleMode}
               />
             )}
             {showModeToggle && !isStreaming && (
               <ModelToggleButton
-                model={copilotModel}
+                model={copilotLlmModel}
                 onToggle={handleToggleModel}
               />
             )}

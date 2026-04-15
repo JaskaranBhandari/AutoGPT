@@ -1970,7 +1970,7 @@ async def stream_chat_completion_sdk(
         mode: Accepted for signature compatibility with the baseline path.
             The SDK path does not currently branch on this value.
         model: Per-request model preference from the frontend toggle.
-            'opus' → Claude Opus; 'sonnet' → global config default.
+            'advanced' → Claude Opus; 'standard' → global config default.
             Takes priority over per-user LaunchDarkly targeting.
     """
     _ = mode  # SDK path ignores the requested mode.
@@ -2304,12 +2304,12 @@ async def stream_chat_completion_sdk(
 
         # Explicit per-request model tier from frontend toggle — highest priority,
         # overrides both global config and per-user LD targeting.
-        # 'advanced' → claude-opus-4-6 (highest capability today).
-        # 'standard' → config.model (current Sonnet default).
-        # Rate-limit multiplier (5×) ensures Opus turns deplete quota faster —
-        # no separate entitlement gate needed; users self-limit via rate limiting.
+        # 'advanced' → claude-opus-4-6 (5× rate-limit cost vs Sonnet).
+        # 'standard' → config.model (current Sonnet default, 1× cost).
+        # No separate entitlement gate — users self-limit via rate limiting.
         if model == "advanced":
             sdk_model = _normalize_model_name("anthropic/claude-opus-4-6")
+            model_cost_multiplier = 5.0  # Opus: $15/$75 vs Sonnet $3/$15 per M tokens
             logger.info(
                 "[SDK] [%s] Per-request model override: advanced (%s)",
                 session_id[:12] if session_id else "?",
@@ -2317,20 +2317,17 @@ async def stream_chat_completion_sdk(
             )
         elif model == "standard":
             sdk_model = _normalize_model_name(config.model)
+            model_cost_multiplier = 1.0
             logger.info(
                 "[SDK] [%s] Per-request model override: standard (%s)",
                 session_id[:12] if session_id else "?",
                 sdk_model,
             )
-
-        # Compute rate-limit cost multiplier based on the final model.
-        # Opus costs 5× more than Sonnet (Anthropic pricing: $15/$75 vs $3/$15 per M tokens).
-        # This multiplier scales the token counter in record_token_usage so that
-        # Opus turns deplete the rate limit proportionally faster.
-        _OPUS_COST_MULTIPLIER = 5.0
-        model_cost_multiplier = (
-            _OPUS_COST_MULTIPLIER if sdk_model and "opus" in sdk_model else 1.0
-        )
+        else:
+            # No per-request override; derive multiplier from final resolved model.
+            model_cost_multiplier = (
+                5.0 if sdk_model and "opus" in sdk_model else 1.0
+            )
 
         # Track SDK-internal compaction (PreCompact hook → start, next msg → end)
         compaction = CompactionTracker()
@@ -2976,7 +2973,7 @@ async def stream_chat_completion_sdk(
             cache_creation_tokens=turn_cache_creation_tokens,
             log_prefix=log_prefix,
             cost_usd=turn_cost_usd,
-            model=config.model,
+            model=sdk_model or config.model,
             provider="anthropic",
             model_cost_multiplier=model_cost_multiplier,
         )
