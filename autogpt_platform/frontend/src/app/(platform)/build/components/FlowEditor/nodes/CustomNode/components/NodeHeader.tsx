@@ -21,7 +21,17 @@ type Props = {
 export const NodeHeader = ({ data, nodeId }: Props) => {
   const updateNodeData = useNodeStore((state) => state.updateNodeData);
 
-  const title = (data.metadata?.customized_name as string) || data.title;
+  const agentName = data.hardcodedValues?.agent_name as string | undefined;
+  const graphVersion = data.hardcodedValues?.graph_version as number | undefined;
+  const agentDisplayName =
+    agentName && graphVersion != null
+      ? `${agentName} v${graphVersion}`
+      : agentName || undefined;
+
+  const title =
+    (data.metadata?.customized_name as string) ||
+    agentDisplayName ||
+    data.title;
 
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState(title);
