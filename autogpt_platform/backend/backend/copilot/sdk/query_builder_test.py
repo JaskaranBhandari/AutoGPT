@@ -204,7 +204,7 @@ async def test_build_query_no_resume_multi_message(monkeypatch):
     )
 
     # Mock _compress_messages to return the messages as-is
-    async def _mock_compress(msgs):
+    async def _mock_compress(msgs, target_tokens=None):
         return msgs, False
 
     monkeypatch.setattr(
@@ -237,7 +237,7 @@ async def test_build_query_no_resume_multi_message_compacted(monkeypatch):
         ]
     )
 
-    async def _mock_compress(msgs):
+    async def _mock_compress(msgs, target_tokens=None):
         return msgs, True  # Simulate actual compaction
 
     monkeypatch.setattr(
