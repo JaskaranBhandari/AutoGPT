@@ -102,15 +102,15 @@ export function useLoadMoreMessages({
 
   // Convert all accumulated raw messages in one pass so tool outputs
   // are matched across inter-page boundaries.
-  // Initial page tool outputs are included via extraToolOutputs for both
-  // backward pagination (older paged pages may contain calls whose outputs
-  // are in the initial/streaming page) and forward pagination (paged pages
-  // may contain outputs whose calls are in the initial page at the boundary).
+  // For backward pagination only: include initial page tool outputs so older
+  // paged pages can match tool calls whose outputs landed in the initial page.
+  // For forward pagination this is unnecessary — tool calls in newer paged
+  // pages cannot have their outputs in the older initial page.
   const pagedMessages: UIMessage<unknown, UIDataTypes, UITools>[] =
     useMemo(() => {
       if (!sessionId || pagedRawMessages.length === 0) return [];
       const extraToolOutputs =
-        initialPageRawMessages.length > 0
+        !forwardPaginated && initialPageRawMessages.length > 0
           ? extractToolOutputsFromRaw(initialPageRawMessages)
           : undefined;
       return convertChatSessionMessagesToUiMessages(
@@ -118,7 +118,7 @@ export function useLoadMoreMessages({
         pagedRawMessages,
         { isComplete: true, extraToolOutputs },
       ).messages;
-    }, [sessionId, pagedRawMessages, initialPageRawMessages]);
+    }, [sessionId, pagedRawMessages, initialPageRawMessages, forwardPaginated]);
 
   async function loadMore() {
     if (!sessionId || !hasMore || isLoadingMoreRef.current) return;

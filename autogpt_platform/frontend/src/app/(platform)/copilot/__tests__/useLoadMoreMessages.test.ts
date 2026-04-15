@@ -395,7 +395,37 @@ describe("useLoadMoreMessages", () => {
   });
 
   describe("pagedMessages — initialPageRawMessages extraToolOutputs", () => {
-    it("calls extractToolOutputsFromRaw when initialPageRawMessages is non-empty", async () => {
+    it("calls extractToolOutputsFromRaw for backward pagination with non-empty initialPageRawMessages", async () => {
+      const { extractToolOutputsFromRaw } = await import(
+        "../helpers/convertChatSessionToUiMessages"
+      );
+
+      const rawMsg = { role: "user", content: "old", sequence: 0 };
+      mockGetV2GetSession.mockResolvedValueOnce(
+        makeSuccessResponse({
+          messages: [rawMsg],
+          has_more_messages: false,
+          oldest_sequence: 0,
+        }),
+      );
+
+      const { result } = renderHook(() =>
+        useLoadMoreMessages({
+          ...BASE_ARGS,
+          forwardPaginated: false,
+          initialOldestSequence: 50,
+          initialPageRawMessages: [{ role: "assistant", content: "response" }],
+        }),
+      );
+
+      await act(async () => {
+        await result.current.loadMore();
+      });
+
+      expect(extractToolOutputsFromRaw).toHaveBeenCalled();
+    });
+
+    it("does NOT call extractToolOutputsFromRaw for forward pagination", async () => {
       const { extractToolOutputsFromRaw } = await import(
         "../helpers/convertChatSessionToUiMessages"
       );
@@ -421,7 +451,7 @@ describe("useLoadMoreMessages", () => {
         await result.current.loadMore();
       });
 
-      expect(extractToolOutputsFromRaw).toHaveBeenCalled();
+      expect(extractToolOutputsFromRaw).not.toHaveBeenCalled();
     });
   });
 
