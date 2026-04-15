@@ -283,7 +283,11 @@ describe("useLoadMoreMessages", () => {
       });
 
       // Parent refetches with a lower newest_sequence (49) — should NOT regress cursor
-      rerender({ ...BASE_ARGS, forwardPaginated: true, initialNewestSequence: 49 });
+      rerender({
+        ...BASE_ARGS,
+        forwardPaginated: true,
+        initialNewestSequence: 49,
+      });
 
       // Next loadMore should still use the advanced cursor (99)
       mockGetV2GetSession.mockResolvedValueOnce(
@@ -325,10 +329,9 @@ describe("useLoadMoreMessages", () => {
         }),
       );
 
-      const { result, rerender } = renderHook(
-        (props) => useLoadMoreMessages(props),
-        { initialProps: nearLimitArgs },
-      );
+      const { result } = renderHook((props) => useLoadMoreMessages(props), {
+        initialProps: nearLimitArgs,
+      });
 
       // Pre-fill pagedRawMessages to near limit by doing a successful load first
       // then checking hasMore is set to false when limit reached
