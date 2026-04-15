@@ -2,6 +2,11 @@
 
 import { cn } from "@/lib/utils";
 import { Flask } from "@phosphor-icons/react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface Props {
   isDryRun: boolean;
@@ -17,32 +22,37 @@ export function DryRunToggleButton({
   onToggle,
 }: Props) {
   const isDisabled = isStreaming || readOnly;
+
+  function handleClick() {
+    if (isDisabled) return;
+    onToggle();
+  }
+
   return (
-    <button
-      type="button"
-      aria-pressed={isDryRun}
-      disabled={isDisabled}
-      onClick={readOnly ? undefined : onToggle}
-      className={cn(
-        "inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
-        isDryRun
-          ? "bg-amber-100 text-amber-900 hover:bg-amber-200"
-          : "text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700",
-        isDisabled && "cursor-default opacity-70",
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-pressed={isDryRun}
+          onClick={handleClick}
+          className={cn(
+            "inline-flex h-9 items-center justify-center gap-1 rounded-full border border-neutral-200 bg-white px-2.5 text-xs font-medium shadow-sm transition-colors hover:bg-neutral-50",
+            isDryRun
+              ? "text-amber-900"
+              : "text-neutral-500 hover:text-neutral-700",
+            isDisabled && "cursor-default opacity-70",
+          )}
+          aria-label={isDryRun ? "Test mode active" : "Enable Test mode"}
+        >
+          <Flask size={14} />
+          {isDryRun ? "Test mode enabled" : "Enable test mode"}
+        </button>
+      </TooltipTrigger>
+      {isDryRun && (
+        <TooltipContent>
+          Test mode — new sessions use dry_run=true
+        </TooltipContent>
       )}
-      aria-label={isDryRun ? "Test mode active" : "Enable Test mode"}
-      title={
-        readOnly
-          ? "Test mode active for this session"
-          : isStreaming
-            ? "Cannot change mode while streaming"
-            : isDryRun
-              ? "Test mode ON — click to disable"
-              : "Enable Test mode — agents will run as dry-run"
-      }
-    >
-      <Flask size={14} />
-      {isDryRun && "Test"}
-    </button>
+    </Tooltip>
   );
 }

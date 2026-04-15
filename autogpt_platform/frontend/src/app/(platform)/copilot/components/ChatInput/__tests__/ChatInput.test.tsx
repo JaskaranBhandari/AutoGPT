@@ -183,10 +183,12 @@ describe("ChatInput mode toggle", () => {
     expect(mockSetCopilotMode).toHaveBeenCalledWith("extended_thinking");
   });
 
-  it("hides toggle button when streaming", () => {
+  it("disables toggle button when streaming", () => {
     mockFlagValue = true;
     render(<ChatInput onSend={mockOnSend} isStreaming />);
-    expect(screen.queryByLabelText(/switch to/i)).toBeNull();
+    expect(screen.getByLabelText(/switch to/i).hasAttribute("disabled")).toBe(
+      true,
+    );
   });
 
   it("exposes aria-pressed=true in extended_thinking mode", () => {
