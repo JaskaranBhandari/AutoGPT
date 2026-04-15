@@ -87,7 +87,7 @@ async def clear_insufficient_funds_notifications(user_id: str) -> int:
 
 def resolve_block_cost(
     node_exec: NodeExecutionEntry,
-) -> tuple[Any, int, dict[str, Any]]:
+) -> tuple["Block | None", int, dict[str, Any]]:
     """Look up the block and compute its base usage cost for an exec.
 
     Shared by charge_usage and charge_extra_runtime_cost so the
@@ -255,7 +255,7 @@ async def charge_node_usage(node_exec: NodeExecutionEntry) -> tuple[int, int]:
     return await asyncio.to_thread(_run)
 
 
-async def _try_send_insufficient_funds_notif(
+async def try_send_insufficient_funds_notif(
     user_id: str,
     graph_id: str,
     error: InsufficientBalanceError,
@@ -325,14 +325,14 @@ async def handle_post_execution_billing(
                 "user_id": node_exec.user_id,
                 "graph_id": node_exec.graph_id,
                 "block_id": node_exec.block_id,
-                "extra_iterations": extra_iterations,
+                "extra_runtime_cost_count": extra_iterations,
                 "error": str(e),
             },
         )
         # Do NOT set execution_stats.error — the node ran to completion,
         # only the post-hoc charge failed. See class-level billing-leak
         # contract documentation.
-        await _try_send_insufficient_funds_notif(
+        await try_send_insufficient_funds_notif(
             node_exec.user_id,
             node_exec.graph_id,
             e,
@@ -346,7 +346,7 @@ async def handle_post_execution_billing(
                 "user_id": node_exec.user_id,
                 "graph_id": node_exec.graph_id,
                 "block_id": node_exec.block_id,
-                "extra_iterations": extra_iterations,
+                "extra_runtime_cost_count": extra_iterations,
                 "error_type": type(e).__name__,
                 "error": str(e),
             },

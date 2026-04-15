@@ -678,7 +678,7 @@ class ExecutionProcessor:
         if status == ExecutionStatus.FAILED and isinstance(
             execution_stats.error, InsufficientBalanceError
         ):
-            await billing._try_send_insufficient_funds_notif(
+            await billing.try_send_insufficient_funds_notif(
                 node_exec.user_id,
                 node_exec.graph_id,
                 execution_stats.error,
