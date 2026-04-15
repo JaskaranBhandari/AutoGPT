@@ -360,6 +360,71 @@ describe("useLoadMoreMessages", () => {
     });
   });
 
+  describe("loadMore — null cursor guard", () => {
+    it("is a no-op when newestSequence is null (forwardPaginated=true)", async () => {
+      const { result } = renderHook(() =>
+        useLoadMoreMessages({
+          ...BASE_ARGS,
+          forwardPaginated: true,
+          initialNewestSequence: null,
+        }),
+      );
+
+      await act(async () => {
+        await result.current.loadMore();
+      });
+
+      expect(mockGetV2GetSession).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op when oldestSequence is null (forwardPaginated=false)", async () => {
+      const { result } = renderHook(() =>
+        useLoadMoreMessages({
+          ...BASE_ARGS,
+          forwardPaginated: false,
+          initialOldestSequence: null,
+        }),
+      );
+
+      await act(async () => {
+        await result.current.loadMore();
+      });
+
+      expect(mockGetV2GetSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("pagedMessages — initialPageRawMessages extraToolOutputs", () => {
+    it("calls extractToolOutputsFromRaw when initialPageRawMessages is non-empty", async () => {
+      const { extractToolOutputsFromRaw } = await import(
+        "../helpers/convertChatSessionToUiMessages"
+      );
+
+      const rawMsg = { role: "assistant", content: "hi", sequence: 50 };
+      mockGetV2GetSession.mockResolvedValueOnce(
+        makeSuccessResponse({
+          messages: [rawMsg],
+          has_more_messages: false,
+          newest_sequence: 99,
+        }),
+      );
+
+      const { result } = renderHook(() =>
+        useLoadMoreMessages({
+          ...BASE_ARGS,
+          forwardPaginated: true,
+          initialPageRawMessages: [{ role: "user", content: "hello" }],
+        }),
+      );
+
+      await act(async () => {
+        await result.current.loadMore();
+      });
+
+      expect(extractToolOutputsFromRaw).toHaveBeenCalled();
+    });
+  });
+
   describe("loadMore — epoch / stale-response guard", () => {
     it("discards response when epoch changes during flight (resetPaged called)", async () => {
       let resolveRequest!: (v: unknown) => void;
