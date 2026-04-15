@@ -5,7 +5,7 @@ import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Annotated, Any, Sequence, get_args
+from typing import Annotated, Any, Literal, Sequence, get_args
 
 import pydantic
 import stripe
@@ -24,6 +24,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.concurrency import run_in_threadpool
+from prisma.enums import SubscriptionTier
 from pydantic import BaseModel
 from starlette.status import HTTP_204_NO_CONTENT, HTTP_404_NOT_FOUND
 from typing_extensions import Optional, TypedDict
@@ -40,18 +41,24 @@ from backend.api.model import (
     UpdateTimezoneRequest,
     UploadFileResponse,
 )
+from backend.blocks import get_block, get_blocks
 from backend.data import execution as execution_db
 from backend.data import graph as graph_db
 from backend.data.auth import api_key as api_key_db
-from backend.data.block import BlockInput, CompletedBlockOutput, get_block, get_blocks
+from backend.data.block import BlockInput, CompletedBlockOutput
 from backend.data.credit import (
     AutoTopUpConfig,
     RefundRequest,
     TransactionHistory,
     UserCredit,
+    cancel_stripe_subscription,
+    create_subscription_checkout,
     get_auto_top_up,
+    get_subscription_price_id,
     get_user_credit_model,
     set_auto_top_up,
+    set_subscription_tier,
+    sync_subscription_from_stripe,
 )
 from backend.data.graph import GraphSettings
 from backend.data.model import CredentialsMetaInput, UserOnboarding
@@ -62,12 +69,16 @@ from backend.data.onboarding import (
     UserOnboardingUpdate,
     complete_onboarding_step,
     complete_re_run_agent,
+    format_onboarding_for_extraction,
     get_recommended_agents,
     get_user_onboarding,
-    increment_runs,
-    onboarding_enabled,
     reset_user_onboarding,
     update_user_onboarding,
+)
+from backend.data.tally import extract_business_understanding
+from backend.data.understanding import (
+    BusinessUnderstandingInput,
+    upsert_business_understanding,
 )
 from backend.data.user import (
     get_or_create_user,
@@ -102,7 +113,6 @@ from backend.util.timezone_utils import (
 from backend.util.virus_scanner import scan_content_safe
 
 from .library import db as library_db
-from .library import model as library_model
 from .store.model import StoreAgentDetails
 
 
@@ -127,6 +137,9 @@ v1_router = APIRouter()
 ########################################################
 
 
+_tally_background_tasks: set[asyncio.Task] = set()
+
+
 @v1_router.post(
     "/auth/user",
     summary="Get or create user",
@@ -135,6 +148,24 @@ v1_router = APIRouter()
 )
 async def get_or_create_user_route(user_data: dict = Security(get_jwt_payload)):
     user = await get_or_create_user(user_data)
+
+    # Fire-and-forget: populate business understanding from Tally form.
+    # We use created_at proximity instead of an is_new flag because
+    # get_or_create_user is cached — a separate is_new return value would be
+    # unreliable on repeated calls within the cache TTL.
+    age_seconds = (datetime.now(timezone.utc) - user.created_at).total_seconds()
+    if age_seconds < 30:
+        try:
+            from backend.data.tally import populate_understanding_from_tally
+
+            task = asyncio.create_task(
+                populate_understanding_from_tally(user.id, user.email)
+            )
+            _tally_background_tasks.add(task)
+            task.add_done_callback(_tally_background_tasks.discard)
+        except Exception:
+            logger.debug("Failed to start Tally population task", exc_info=True)
+
     return user.model_dump()
 
 
@@ -262,14 +293,34 @@ async def get_onboarding_agents(
     return await get_recommended_agents(user_id)
 
 
+class OnboardingProfileRequest(pydantic.BaseModel):
+    """Request body for onboarding profile submission."""
+
+    user_name: str = pydantic.Field(min_length=1, max_length=100)
+    user_role: str = pydantic.Field(min_length=1, max_length=100)
+    pain_points: list[str] = pydantic.Field(default_factory=list, max_length=20)
+
+
+class OnboardingStatusResponse(pydantic.BaseModel):
+    """Response for onboarding completion check."""
+
+    is_completed: bool
+
+
 @v1_router.get(
-    "/onboarding/enabled",
-    summary="Is onboarding enabled",
+    "/onboarding/completed",
+    summary="Check if onboarding is completed",
     tags=["onboarding", "public"],
+    response_model=OnboardingStatusResponse,
     dependencies=[Security(requires_user)],
 )
-async def is_onboarding_enabled() -> bool:
-    return await onboarding_enabled()
+async def is_onboarding_completed(
+    user_id: Annotated[str, Security(get_user_id)],
+) -> OnboardingStatusResponse:
+    user_onboarding = await get_user_onboarding(user_id)
+    return OnboardingStatusResponse(
+        is_completed=OnboardingStep.VISIT_COPILOT in user_onboarding.completedSteps,
+    )
 
 
 @v1_router.post(
@@ -281,6 +332,38 @@ async def is_onboarding_enabled() -> bool:
 )
 async def reset_onboarding(user_id: Annotated[str, Security(get_user_id)]):
     return await reset_user_onboarding(user_id)
+
+
+@v1_router.post(
+    "/onboarding/profile",
+    summary="Submit onboarding profile",
+    tags=["onboarding"],
+    dependencies=[Security(requires_user)],
+)
+async def submit_onboarding_profile(
+    data: OnboardingProfileRequest,
+    user_id: Annotated[str, Security(get_user_id)],
+):
+    formatted = format_onboarding_for_extraction(
+        user_name=data.user_name,
+        user_role=data.user_role,
+        pain_points=data.pain_points,
+    )
+
+    try:
+        understanding_input = await extract_business_understanding(formatted)
+    except Exception:
+        understanding_input = BusinessUnderstandingInput.model_construct()
+
+    # Ensure the direct fields are set even if LLM missed them
+    understanding_input.user_name = data.user_name
+    understanding_input.user_role = data.user_role
+    if not understanding_input.pain_points:
+        understanding_input.pain_points = data.pain_points
+
+    await upsert_business_understanding(user_id, understanding_input)
+
+    return {"status": "ok"}
 
 
 ########################################################
@@ -365,6 +448,8 @@ async def execute_graph_block(
     obj = get_block(block_id)
     if not obj:
         raise HTTPException(status_code=404, detail=f"Block #{block_id} not found.")
+    if obj.disabled:
+        raise HTTPException(status_code=403, detail=f"Block #{block_id} is disabled.")
 
     user = await get_user_by_id(user_id)
     if not user:
@@ -405,7 +490,6 @@ async def execute_graph_block(
 async def upload_file(
     user_id: Annotated[str, Security(get_user_id)],
     file: UploadFile = File(...),
-    provider: str = "gcs",
     expiration_hours: int = 24,
 ) -> UploadFileResponse:
     """
@@ -468,7 +552,6 @@ async def upload_file(
     storage_path = await cloud_storage.store_file(
         content=content,
         filename=file_name,
-        provider=provider,
         expiration_hours=expiration_hours,
         user_id=user_id,
     )
@@ -550,6 +633,11 @@ async def fulfill_checkout(user_id: Annotated[str, Security(get_user_id)]):
 async def configure_user_auto_top_up(
     request: AutoTopUpConfig, user_id: Annotated[str, Security(get_user_id)]
 ) -> str:
+    """Configure auto top-up settings and perform an immediate top-up if needed.
+
+    Raises HTTPException(422) if the request parameters are invalid or if
+    the credit top-up fails.
+    """
     if request.threshold < 0:
         raise HTTPException(status_code=422, detail="Threshold must be greater than 0")
     if request.amount < 500 and request.amount != 0:
@@ -564,14 +652,27 @@ async def configure_user_auto_top_up(
     user_credit_model = await get_user_credit_model(user_id)
     current_balance = await user_credit_model.get_credits(user_id)
 
-    if current_balance < request.threshold:
-        await user_credit_model.top_up_credits(user_id, request.amount)
-    else:
-        await user_credit_model.top_up_credits(user_id, 0)
+    try:
+        if current_balance < request.threshold:
+            await user_credit_model.top_up_credits(user_id, request.amount)
+        else:
+            await user_credit_model.top_up_credits(user_id, 0)
+    except ValueError as e:
+        known_messages = (
+            "must not be negative",
+            "already exists for user",
+            "No payment method found",
+        )
+        if any(msg in str(e) for msg in known_messages):
+            raise HTTPException(status_code=422, detail=str(e))
+        raise
 
-    await set_auto_top_up(
-        user_id, AutoTopUpConfig(threshold=request.threshold, amount=request.amount)
-    )
+    try:
+        await set_auto_top_up(
+            user_id, AutoTopUpConfig(threshold=request.threshold, amount=request.amount)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return "Auto top-up settings updated"
 
 
@@ -585,6 +686,115 @@ async def get_user_auto_top_up(
     user_id: Annotated[str, Security(get_user_id)],
 ) -> AutoTopUpConfig:
     return await get_auto_top_up(user_id)
+
+
+class SubscriptionTierRequest(BaseModel):
+    tier: Literal["FREE", "PRO", "BUSINESS"]
+    success_url: str = ""
+    cancel_url: str = ""
+
+
+class SubscriptionCheckoutResponse(BaseModel):
+    url: str
+
+
+class SubscriptionStatusResponse(BaseModel):
+    tier: str
+    monthly_cost: int
+    tier_costs: dict[str, int]
+
+
+@v1_router.get(
+    path="/credits/subscription",
+    summary="Get subscription tier, current cost, and all tier costs",
+    operation_id="getSubscriptionStatus",
+    tags=["credits"],
+    dependencies=[Security(requires_user)],
+)
+async def get_subscription_status(
+    user_id: Annotated[str, Security(get_user_id)],
+) -> SubscriptionStatusResponse:
+    user = await get_user_by_id(user_id)
+    tier = user.subscription_tier or SubscriptionTier.FREE
+
+    paid_tiers = [SubscriptionTier.PRO, SubscriptionTier.BUSINESS]
+    price_ids = await asyncio.gather(
+        *[get_subscription_price_id(t) for t in paid_tiers]
+    )
+
+    tier_costs: dict[str, int] = {"FREE": 0, "ENTERPRISE": 0}
+    for t, price_id in zip(paid_tiers, price_ids):
+        cost = 0
+        if price_id:
+            try:
+                price = await run_in_threadpool(stripe.Price.retrieve, price_id)
+                cost = price.unit_amount or 0
+            except stripe.StripeError:
+                pass
+        tier_costs[t.value] = cost
+
+    return SubscriptionStatusResponse(
+        tier=tier.value,
+        monthly_cost=tier_costs.get(tier.value, 0),
+        tier_costs=tier_costs,
+    )
+
+
+@v1_router.post(
+    path="/credits/subscription",
+    summary="Start a Stripe Checkout session to upgrade subscription tier",
+    operation_id="updateSubscriptionTier",
+    tags=["credits"],
+    dependencies=[Security(requires_user)],
+)
+async def update_subscription_tier(
+    request: SubscriptionTierRequest,
+    user_id: Annotated[str, Security(get_user_id)],
+) -> SubscriptionCheckoutResponse:
+    # Pydantic validates tier is one of FREE/PRO/BUSINESS via Literal type.
+    tier = SubscriptionTier(request.tier)
+
+    # ENTERPRISE tier is admin-managed — block self-service changes from ENTERPRISE users.
+    user = await get_user_by_id(user_id)
+    if (user.subscription_tier or SubscriptionTier.FREE) == SubscriptionTier.ENTERPRISE:
+        raise HTTPException(
+            status_code=403,
+            detail="ENTERPRISE subscription changes must be managed by an administrator",
+        )
+
+    payment_enabled = await is_feature_enabled(
+        Flag.ENABLE_PLATFORM_PAYMENT, user_id, default=False
+    )
+
+    # Downgrade to FREE: cancel active Stripe subscription, then update the DB tier.
+    if tier == SubscriptionTier.FREE:
+        if payment_enabled:
+            await cancel_stripe_subscription(user_id)
+        await set_subscription_tier(user_id, tier)
+        return SubscriptionCheckoutResponse(url="")
+
+    # Beta users (payment not enabled) → update tier directly without Stripe.
+    if not payment_enabled:
+        await set_subscription_tier(user_id, tier)
+        return SubscriptionCheckoutResponse(url="")
+
+    # Paid upgrade → create Stripe Checkout Session.
+    if not request.success_url or not request.cancel_url:
+        raise HTTPException(
+            status_code=422,
+            detail="success_url and cancel_url are required for paid tier upgrades",
+        )
+    try:
+        url = await create_subscription_checkout(
+            user_id=user_id,
+            tier=tier,
+            success_url=request.success_url,
+            cancel_url=request.cancel_url,
+        )
+    except (ValueError, stripe.StripeError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return SubscriptionCheckoutResponse(url=url)
 
 
 @v1_router.post(
@@ -616,6 +826,13 @@ async def stripe_webhook(request: Request):
         or event["type"] == "checkout.session.async_payment_succeeded"
     ):
         await UserCredit().fulfill_checkout(session_id=event["data"]["object"]["id"])
+
+    if event["type"] in (
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+    ):
+        await sync_subscription_from_stripe(event["data"]["object"])
 
     if event["type"] == "charge.dispute.created":
         await UserCredit().handle_dispute(event["data"]["object"])
@@ -762,10 +979,8 @@ async def create_new_graph(
     graph.reassign_ids(user_id=user_id, reassign_graph_id=True)
     graph.validate_graph(for_run=False)
 
-    # The return value of the create graph & library function is intentionally not used here,
-    # as the graph already valid and no sub-graphs are returned back.
     await graph_db.create_graph(graph, user_id=user_id)
-    await library_db.create_library_agent(graph, user_id=user_id)
+    await library_db.create_library_agent(graph, user_id)
     activated_graph = await on_graph_activate(graph, user_id=user_id)
 
     if create_graph.source == "builder":
@@ -802,18 +1017,16 @@ async def update_graph(
     graph: graph_db.Graph,
     user_id: Annotated[str, Security(get_user_id)],
 ) -> graph_db.GraphModel:
-    # Sanity check
     if graph.id and graph.id != graph_id:
         raise HTTPException(400, detail="Graph ID does not match ID in URI")
 
-    # Determine new version
     existing_versions = await graph_db.get_graph_all_versions(graph_id, user_id=user_id)
     if not existing_versions:
         raise HTTPException(404, detail=f"Graph #{graph_id} not found")
-    latest_version_number = max(g.version for g in existing_versions)
-    graph.version = latest_version_number + 1
 
+    graph.version = max(g.version for g in existing_versions) + 1
     current_active_version = next((v for v in existing_versions if v.is_active), None)
+
     graph = graph_db.make_graph_model(graph, user_id)
     graph.reassign_ids(user_id=user_id, reassign_graph_id=False)
     graph.validate_graph(for_run=False)
@@ -821,27 +1034,23 @@ async def update_graph(
     new_graph_version = await graph_db.create_graph(graph, user_id=user_id)
 
     if new_graph_version.is_active:
-        # Keep the library agent up to date with the new active version
-        await _update_library_agent_version_and_settings(user_id, new_graph_version)
-
-        # Handle activation of the new graph first to ensure continuity
+        await library_db.update_library_agent_version_and_settings(
+            user_id, new_graph_version
+        )
         new_graph_version = await on_graph_activate(new_graph_version, user_id=user_id)
-        # Ensure new version is the only active version
         await graph_db.set_graph_active_version(
             graph_id=graph_id, version=new_graph_version.version, user_id=user_id
         )
         if current_active_version:
-            # Handle deactivation of the previously active version
             await on_graph_deactivate(current_active_version, user_id=user_id)
 
-    # Fetch new graph version *with sub-graphs* (needed for credentials input schema)
     new_graph_version_with_subgraphs = await graph_db.get_graph(
         graph_id,
         new_graph_version.version,
         user_id=user_id,
         include_subgraphs=True,
     )
-    assert new_graph_version_with_subgraphs  # make type checker happy
+    assert new_graph_version_with_subgraphs
     return new_graph_version_with_subgraphs
 
 
@@ -879,33 +1088,13 @@ async def set_graph_active_version(
     )
 
     # Keep the library agent up to date with the new active version
-    await _update_library_agent_version_and_settings(user_id, new_active_graph)
+    await library_db.update_library_agent_version_and_settings(
+        user_id, new_active_graph
+    )
 
     if current_active_graph and current_active_graph.version != new_active_version:
         # Handle deactivation of the previously active version
         await on_graph_deactivate(current_active_graph, user_id=user_id)
-
-
-async def _update_library_agent_version_and_settings(
-    user_id: str, agent_graph: graph_db.GraphModel
-) -> library_model.LibraryAgent:
-    # Keep the library agent up to date with the new active version
-    library = await library_db.update_agent_version_in_library(
-        user_id, agent_graph.id, agent_graph.version
-    )
-    # If the graph has HITL node, initialize the setting if it's not already set.
-    if (
-        agent_graph.has_human_in_the_loop
-        and library.settings.human_in_the_loop_safe_mode is None
-    ):
-        await library_db.update_library_agent_settings(
-            user_id=user_id,
-            agent_id=library.id,
-            settings=library.settings.model_copy(
-                update={"human_in_the_loop_safe_mode": True}
-            ),
-        )
-    return library
 
 
 @v1_router.patch(
@@ -920,21 +1109,18 @@ async def update_graph_settings(
     user_id: Annotated[str, Security(get_user_id)],
 ) -> GraphSettings:
     """Update graph settings for the user's library agent."""
-    # Get the library agent for this graph
     library_agent = await library_db.get_library_agent_by_graph_id(
         graph_id=graph_id, user_id=user_id
     )
     if not library_agent:
         raise HTTPException(404, f"Graph #{graph_id} not found in user's library")
 
-    # Update the library agent settings
-    updated_agent = await library_db.update_library_agent_settings(
+    updated_agent = await library_db.update_library_agent(
+        library_agent_id=library_agent.id,
         user_id=user_id,
-        agent_id=library_agent.id,
         settings=settings,
     )
 
-    # Return the updated settings
     return GraphSettings.model_validate(updated_agent.settings)
 
 
@@ -954,14 +1140,16 @@ async def execute_graph(
     source: Annotated[GraphExecutionSource | None, Body(embed=True)] = None,
     graph_version: Optional[int] = None,
     preset_id: Optional[str] = None,
+    dry_run: Annotated[bool, Body(embed=True)] = False,
 ) -> execution_db.GraphExecutionMeta:
-    user_credit_model = await get_user_credit_model(user_id)
-    current_balance = await user_credit_model.get_credits(user_id)
-    if current_balance <= 0:
-        raise HTTPException(
-            status_code=402,
-            detail="Insufficient balance to execute the agent. Please top up your account.",
-        )
+    if not dry_run:
+        user_credit_model = await get_user_credit_model(user_id)
+        current_balance = await user_credit_model.get_credits(user_id)
+        if current_balance <= 0:
+            raise HTTPException(
+                status_code=402,
+                detail="Insufficient balance to execute the agent. Please top up your account.",
+            )
 
     try:
         result = await execution_utils.add_graph_execution(
@@ -971,11 +1159,11 @@ async def execute_graph(
             preset_id=preset_id,
             graph_version=graph_version,
             graph_credentials_inputs=credentials_inputs,
+            dry_run=dry_run,
         )
         # Record successful graph execution
         record_graph_execution(graph_id=graph_id, status="success", user_id=user_id)
         record_graph_operation(operation="execute", status="success")
-        await increment_runs(user_id)
         await complete_re_run_agent(user_id, graph_id)
         if source == "library":
             await complete_onboarding_step(

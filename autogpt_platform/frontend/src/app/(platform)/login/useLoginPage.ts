@@ -21,12 +21,18 @@ export function useLoginPage() {
   const [showNotAllowedModal, setShowNotAllowedModal] = useState(false);
   const isCloudEnv = environment.isCloud();
 
-  // Get redirect destination from 'next' query parameter
-  const nextUrl = searchParams.get("next");
+  // Get redirect destination from 'next' query parameter.
+  // Only allow relative paths to prevent open redirect attacks
+  // (e.g., /login?next=https://phishing.site).
+  const rawNext = searchParams.get("next");
+  const nextUrl =
+    rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//")
+      ? rawNext
+      : null;
 
   useEffect(() => {
     if (isLoggedIn && !isLoggingIn) {
-      router.push(nextUrl || "/marketplace");
+      router.push(nextUrl || "/");
     }
   }, [isLoggedIn, isLoggingIn, nextUrl, router]);
 
@@ -93,13 +99,11 @@ export function useLoginPage() {
         throw new Error(result.error || "Login failed");
       }
 
-      if (nextUrl) {
-        router.replace(nextUrl);
-      } else if (result.onboarding) {
-        router.replace("/onboarding");
-      } else {
-        router.replace("/marketplace");
-      }
+      // Use full page navigation to ensure middleware processes the new auth cookies.
+      // router.replace() does a soft navigation where the cookie store may not
+      // immediately reflect cookies set by the server action, causing a blank page.
+      // This matches the OAuth flow which also uses window.location.href.
+      window.location.href = nextUrl || result.next || "/";
     } catch (error) {
       toast({
         title:
@@ -108,6 +112,7 @@ export function useLoginPage() {
             : "Unexpected error during login",
         variant: "destructive",
       });
+
       setIsLoading(false);
       setIsLoggingIn(false);
     }

@@ -20,6 +20,7 @@ export function PublishAgentModal({
   onStateChange,
   preSelectedAgentId,
   preSelectedAgentVersion,
+  showTrigger = true,
 }: Props) {
   const {
     // State
@@ -83,6 +84,8 @@ export function PublishAgentModal({
             subheader={currentState.submissionData.sub_heading}
             description={currentState.submissionData.description || ""}
             thumbnailSrc={currentState.submissionData.image_urls?.[0]}
+            status={currentState.submissionData.status}
+            reviewComments={currentState.submissionData.review_comments}
             onClose={handleClose}
             onDone={handleClose}
             onViewProgress={() => handleGoToDashboard()}
@@ -121,9 +124,11 @@ export function PublishAgentModal({
           },
         }}
       >
-        <Dialog.Trigger>
-          {trigger || <Button size="small">Publish Agent</Button>}
-        </Dialog.Trigger>
+        {showTrigger && (
+          <Dialog.Trigger>
+            {trigger || <Button size="small">Publish Agent</Button>}
+          </Dialog.Trigger>
+        )}
         <Dialog.Content>
           <div data-testid="publish-agent-modal">{renderContent()}</div>
         </Dialog.Content>

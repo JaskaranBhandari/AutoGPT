@@ -1,11 +1,9 @@
 import logging
+import queue
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from multiprocessing import Manager
-from queue import Empty
 from typing import (
-    TYPE_CHECKING,
     Annotated,
     Any,
     AsyncGenerator,
@@ -40,6 +38,8 @@ from prisma.types import (
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from pydantic.fields import Field
 
+from backend.blocks import get_block, get_io_block_ids, get_webhook_block_ids
+from backend.blocks._base import BlockType
 from backend.util import type as type_utils
 from backend.util.exceptions import DatabaseError
 from backend.util.json import SafeJson
@@ -48,14 +48,7 @@ from backend.util.retry import func_retry
 from backend.util.settings import Config
 from backend.util.truncate import truncate
 
-from .block import (
-    BlockInput,
-    BlockType,
-    CompletedBlockOutput,
-    get_block,
-    get_io_block_ids,
-    get_webhook_block_ids,
-)
+from .block import BlockInput, CompletedBlockOutput
 from .db import BaseDbModel, query_raw_with_schema
 from .event_bus import AsyncRedisEventBus, RedisEventBus
 from .includes import (
@@ -64,10 +57,12 @@ from .includes import (
     GRAPH_EXECUTION_INCLUDE_WITH_NODES,
     graph_execution_include,
 )
-from .model import CredentialsMetaInput, GraphExecutionStats, NodeExecutionStats
-
-if TYPE_CHECKING:
-    pass
+from .model import (
+    CredentialsMetaInput,
+    GraphExecutionStats,
+    GraphInput,
+    NodeExecutionStats,
+)
 
 T = TypeVar("T")
 
@@ -81,10 +76,31 @@ class ExecutionContext(BaseModel):
     This includes information needed by blocks, sub-graphs, and execution management.
     """
 
-    safe_mode: bool = True
+    model_config = {"extra": "ignore"}
+
+    # Execution identity
+    user_id: Optional[str] = None
+    graph_id: Optional[str] = None
+    graph_exec_id: Optional[str] = None
+    graph_version: Optional[int] = None
+    node_id: Optional[str] = None
+    node_exec_id: Optional[str] = None
+
+    # Safety settings
+    human_in_the_loop_safe_mode: bool = True
+    sensitive_action_safe_mode: bool = False
+    dry_run: bool = False  # When True, blocks are LLM-simulated, no real execution
+
+    # User settings
     user_timezone: str = "UTC"
+
+    # Execution hierarchy
     root_execution_id: Optional[str] = None
     parent_execution_id: Optional[str] = None
+
+    # Workspace
+    workspace_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 # -------------------------- Models -------------------------- #
@@ -148,15 +164,22 @@ class GraphExecutionMeta(BaseDbModel):
     user_id: str
     graph_id: str
     graph_version: int
-    inputs: Optional[BlockInput]  # no default -> required in the OpenAPI spec
+    inputs: Optional[GraphInput]  # no default -> required in the OpenAPI spec
     credential_inputs: Optional[dict[str, CredentialsMetaInput]]
     nodes_input_masks: Optional[dict[str, BlockInput]]
     preset_id: Optional[str]
     status: ExecutionStatus
-    started_at: datetime
-    ended_at: datetime
+    started_at: Optional[datetime] = Field(
+        None,
+        description="When execution started running. Null if not yet started (QUEUED).",
+    )
+    ended_at: Optional[datetime] = Field(
+        None,
+        description="When execution finished. Null if not yet completed (QUEUED, RUNNING, INCOMPLETE, REVIEW).",
+    )
     is_shared: bool = False
     share_token: Optional[str] = None
+    is_dry_run: bool = False
 
     class Stats(BaseModel):
         model_config = ConfigDict(
@@ -229,10 +252,8 @@ class GraphExecutionMeta(BaseDbModel):
 
     @staticmethod
     def from_db(_graph_exec: AgentGraphExecution):
-        now = datetime.now(timezone.utc)
-        # TODO: make started_at and ended_at optional
-        start_time = _graph_exec.startedAt or _graph_exec.createdAt
-        end_time = _graph_exec.updatedAt or now
+        start_time = _graph_exec.startedAt
+        end_time = _graph_exec.endedAt
 
         try:
             stats = GraphExecutionStats.model_validate(_graph_exec.stats)
@@ -249,7 +270,7 @@ class GraphExecutionMeta(BaseDbModel):
             user_id=_graph_exec.userId,
             graph_id=_graph_exec.agentGraphId,
             graph_version=_graph_exec.agentGraphVersion,
-            inputs=cast(BlockInput | None, _graph_exec.inputs),
+            inputs=cast(GraphInput | None, _graph_exec.inputs),
             credential_inputs=(
                 {
                     name: CredentialsMetaInput.model_validate(cmi)
@@ -287,11 +308,12 @@ class GraphExecutionMeta(BaseDbModel):
             ),
             is_shared=_graph_exec.isShared,
             share_token=_graph_exec.shareToken,
+            is_dry_run=stats.is_dry_run if stats else False,
         )
 
 
 class GraphExecution(GraphExecutionMeta):
-    inputs: BlockInput  # type: ignore - incompatible override is intentional
+    inputs: GraphInput  # type: ignore - incompatible override is intentional
     outputs: CompletedBlockOutput
 
     @staticmethod
@@ -320,12 +342,13 @@ class GraphExecution(GraphExecutionMeta):
                     if (
                         (block := get_block(exec.block_id))
                         and block.block_type == BlockType.INPUT
+                        and "name" in exec.input_data
                     )
                 }
             ),
             **{
                 # input from webhook-triggered block
-                "payload": exec.input_data["payload"]
+                "payload": exec.input_data.get("payload")
                 for exec in complete_node_executions
                 if (
                     (block := get_block(exec.block_id))
@@ -338,8 +361,10 @@ class GraphExecution(GraphExecutionMeta):
         outputs: CompletedBlockOutput = defaultdict(list)
         for exec in complete_node_executions:
             if (
-                block := get_block(exec.block_id)
-            ) and block.block_type == BlockType.OUTPUT:
+                (block := get_block(exec.block_id))
+                and block.block_type == BlockType.OUTPUT
+                and "name" in exec.input_data
+            ):
                 outputs[exec.input_data["name"]].append(exec.input_data.get("value"))
 
         return GraphExecution(
@@ -383,6 +408,7 @@ class GraphExecutionWithNodes(GraphExecution):
         self,
         execution_context: ExecutionContext,
         compiled_nodes_input_masks: Optional[NodesInputMasks] = None,
+        nodes_to_skip: Optional[set[str]] = None,
     ):
         return GraphExecutionEntry(
             user_id=self.user_id,
@@ -390,6 +416,7 @@ class GraphExecutionWithNodes(GraphExecution):
             graph_version=self.graph_version or 0,
             graph_exec_id=self.id,
             nodes_input_masks=compiled_nodes_input_masks,
+            nodes_to_skip=nodes_to_skip or set(),
             execution_context=execution_context,
         )
 
@@ -422,7 +449,7 @@ class NodeExecutionResult(BaseModel):
             for name, messages in stats.cleared_inputs.items():
                 input_data[name] = messages[-1] if messages else ""
         elif _node_exec.executionData:
-            input_data = type_utils.convert(_node_exec.executionData, dict[str, Any])
+            input_data = type_utils.convert(_node_exec.executionData, BlockInput)
         else:
             input_data: BlockInput = defaultdict()
             for data in _node_exec.Input or []:
@@ -697,11 +724,12 @@ async def create_graph_execution(
     graph_version: int,
     starting_nodes_input: list[tuple[str, BlockInput]],  # list[(node_id, BlockInput)]
     inputs: Mapping[str, JsonValue],
-    user_id: str,
+    user_id: str,  # Validated by callers (API auth layer / service-level checks)
     preset_id: Optional[str] = None,
     credential_inputs: Optional[Mapping[str, CredentialsMetaInput]] = None,
     nodes_input_masks: Optional[NodesInputMasks] = None,
     parent_graph_exec_id: Optional[str] = None,
+    is_dry_run: bool = False,
 ) -> GraphExecutionWithNodes:
     """
     Create a new AgentGraphExecution record.
@@ -739,6 +767,7 @@ async def create_graph_execution(
             "userId": user_id,
             "agentPresetId": preset_id,
             "parentGraphExecutionId": parent_graph_exec_id,
+            **({"stats": Json({"is_dry_run": True})} if is_dry_run else {}),
         },
         include=GRAPH_EXECUTION_INCLUDE_WITH_NODES,
     )
@@ -842,7 +871,7 @@ async def upsert_execution_output(
 
 async def get_execution_outputs_by_node_exec_id(
     node_exec_id: str,
-) -> dict[str, Any]:
+) -> CompletedBlockOutput:
     """
     Get all execution outputs for a specific node execution ID.
 
@@ -856,12 +885,12 @@ async def get_execution_outputs_by_node_exec_id(
         where={"referencedByOutputExecId": node_exec_id}
     )
 
-    result = {}
+    result: CompletedBlockOutput = defaultdict(list)
     for output in outputs:
         if output.data is not None:
-            result[output.name] = type_utils.convert(output.data, JsonValue)
+            result[output.name].append(type_utils.convert(output.data, JsonValue))
 
-    return result
+    return dict(result)
 
 
 async def update_graph_execution_start_time(
@@ -900,6 +929,14 @@ async def update_graph_execution_stats(
 
     if status:
         update_data["executionStatus"] = status
+        # Set endedAt when execution reaches a terminal status
+        terminal_statuses = [
+            ExecutionStatus.COMPLETED,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.TERMINATED,
+        ]
+        if status in terminal_statuses:
+            update_data["endedAt"] = datetime.now(tz=timezone.utc)
 
     where_clause: AgentGraphExecutionWhereInput = {"id": graph_exec_id}
 
@@ -1145,6 +1182,8 @@ class GraphExecutionEntry(BaseModel):
     graph_id: str
     graph_version: int
     nodes_input_masks: Optional[NodesInputMasks] = None
+    nodes_to_skip: set[str] = Field(default_factory=set)
+    """Node IDs that should be skipped due to optional credentials not being configured."""
     execution_context: ExecutionContext = Field(default_factory=ExecutionContext)
 
 
@@ -1164,12 +1203,16 @@ class NodeExecutionEntry(BaseModel):
 
 class ExecutionQueue(Generic[T]):
     """
-    Queue for managing the execution of agents.
-    This will be shared between different processes
+    Thread-safe queue for managing node execution within a single graph execution.
+
+    Note: Uses queue.Queue (not multiprocessing.Queue) since all access is from
+    threads within the same process. If migrating back to ProcessPoolExecutor,
+    replace with multiprocessing.Manager().Queue() for cross-process safety.
     """
 
     def __init__(self):
-        self.queue = Manager().Queue()
+        # Thread-safe queue (not multiprocessing) — see class docstring
+        self.queue: queue.Queue[T] = queue.Queue()
 
     def add(self, execution: T) -> T:
         self.queue.put(execution)
@@ -1184,7 +1227,7 @@ class ExecutionQueue(Generic[T]):
     def get_or_none(self) -> T | None:
         try:
             return self.queue.get_nowait()
-        except Empty:
+        except queue.Empty:
             return None
 
 
@@ -1459,7 +1502,7 @@ async def get_graph_execution_by_share_token(
                     # The executionData contains the structured input with 'name' and 'value' fields
                     if hasattr(node_exec, "executionData") and node_exec.executionData:
                         exec_data = type_utils.convert(
-                            node_exec.executionData, dict[str, Any]
+                            node_exec.executionData, BlockInput
                         )
                         if "name" in exec_data:
                             name = exec_data["name"]
