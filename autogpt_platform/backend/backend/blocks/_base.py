@@ -421,12 +421,12 @@ class BlockWebhookConfig(BlockManualWebhookConfig):
 class Block(ABC, Generic[BlockSchemaInputType, BlockSchemaOutputType]):
     _optimized_description: ClassVar[str | None] = None
 
-    def extra_credit_charges(self, execution_stats: NodeExecutionStats) -> int:
-        """Return extra credits to charge after this block run completes.
+    def extra_runtime_cost(self, execution_stats: NodeExecutionStats) -> int:
+        """Return extra runtime cost to charge after this block run completes.
 
         Called by the executor after a block finishes with COMPLETED status.
         The return value is the number of additional base-cost credits to
-        charge beyond the single credit already collected by ``_charge_usage``
+        charge beyond the single credit already collected by charge_usage
         at the start of execution. Defaults to 0 (no extra charges).
 
         Override in blocks (e.g. OrchestratorBlock) that make multiple LLM

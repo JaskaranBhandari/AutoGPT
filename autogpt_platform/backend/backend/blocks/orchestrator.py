@@ -376,11 +376,11 @@ class OrchestratorBlock(Block):
     re-raise carve-out for this reason.
     """
 
-    def extra_credit_charges(self, execution_stats: NodeExecutionStats) -> int:
-        """Charge one extra base credit per LLM call beyond the first.
+    def extra_runtime_cost(self, execution_stats: NodeExecutionStats) -> int:
+        """Charge one extra runtime cost per LLM call beyond the first.
 
         In agent mode each iteration makes one LLM call. The first is already
-        covered by _charge_usage(); this returns the number of additional
+        covered by charge_usage(); this returns the number of additional
         credits so the executor can bill the remaining calls post-completion.
 
         SDK-mode exemption: when the block runs via _execute_tools_sdk_mode,
