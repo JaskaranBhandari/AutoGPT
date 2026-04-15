@@ -181,6 +181,22 @@ describe("useCopilotUIStore", () => {
     });
   });
 
+  describe("copilotLlmModel", () => {
+    it("defaults to standard", () => {
+      expect(useCopilotUIStore.getState().copilotLlmModel).toBe("standard");
+    });
+
+    it("sets model to advanced", () => {
+      useCopilotUIStore.getState().setCopilotLlmModel("advanced");
+      expect(useCopilotUIStore.getState().copilotLlmModel).toBe("advanced");
+    });
+
+    it("persists model to localStorage", () => {
+      useCopilotUIStore.getState().setCopilotLlmModel("advanced");
+      expect(window.localStorage.getItem("copilot-model")).toBe("advanced");
+    });
+  });
+
   describe("clearCopilotLocalData", () => {
     it("resets state and clears localStorage keys", () => {
       useCopilotUIStore.getState().setCopilotChatMode("fast");
@@ -202,6 +218,7 @@ describe("useCopilotUIStore", () => {
       ).toBeNull();
       expect(window.localStorage.getItem("copilot-sound-enabled")).toBeNull();
       expect(window.localStorage.getItem("copilot-mode")).toBeNull();
+      expect(window.localStorage.getItem("copilot-model")).toBeNull();
       expect(
         window.localStorage.getItem("copilot-completed-sessions"),
       ).toBeNull();
