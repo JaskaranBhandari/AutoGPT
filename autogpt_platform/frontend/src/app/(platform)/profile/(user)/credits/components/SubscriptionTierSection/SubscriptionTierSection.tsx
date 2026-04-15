@@ -214,7 +214,7 @@ export function SubscriptionTierSection() {
           <p className="text-sm text-neutral-600 dark:text-neutral-400">
             {confirmDowngradeTo === "FREE"
               ? "Downgrading to Free will schedule your subscription to cancel at the end of your current billing period. You keep your current plan until then."
-              : `Switching to ${confirmDowngradeTo} will take effect immediately.`}{" "}
+              : `Switching to ${TIERS.find((t) => t.key === confirmDowngradeTo)?.label ?? confirmDowngradeTo} will take effect immediately.`}{" "}
             Are you sure?
           </p>
           <Dialog.Footer>
