@@ -96,6 +96,39 @@ class TestResolveFallbackModel:
         assert result is not None
         assert "sonnet" in result.lower() or "claude" in result.lower()
 
+    def test_distinct_helper_drops_same_model(self):
+        """CLI fallback is omitted when it matches the resolved primary model."""
+        cfg = _make_config(
+            model="anthropic/claude-sonnet-4-6",
+            claude_agent_fallback_model="claude-sonnet-4-6",
+            use_openrouter=False,
+        )
+        with patch(f"{_SVC}.config", cfg):
+            from backend.copilot.sdk.service import (
+                _resolve_distinct_fallback_model,
+                _resolve_sdk_model,
+            )
+
+            assert _resolve_distinct_fallback_model(_resolve_sdk_model()) is None
+
+    def test_distinct_helper_keeps_different_model(self):
+        """CLI fallback is preserved when it differs from the primary model."""
+        cfg = _make_config(
+            model="anthropic/claude-sonnet-4-6",
+            claude_agent_fallback_model="claude-sonnet-4-20250514",
+            use_openrouter=False,
+        )
+        with patch(f"{_SVC}.config", cfg):
+            from backend.copilot.sdk.service import (
+                _resolve_distinct_fallback_model,
+                _resolve_sdk_model,
+            )
+
+            assert (
+                _resolve_distinct_fallback_model(_resolve_sdk_model())
+                == "claude-sonnet-4-20250514"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Security & isolation env vars

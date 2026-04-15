@@ -686,6 +686,21 @@ def _resolve_fallback_model() -> str | None:
     return _normalize_model_name(raw)
 
 
+def _resolve_distinct_fallback_model(primary_model: str | None) -> str | None:
+    """Resolve a fallback model that does not collide with *primary_model*."""
+    fallback_model = _resolve_fallback_model()
+    if not fallback_model or not primary_model:
+        return fallback_model
+    if fallback_model == primary_model:
+        logger.warning(
+            "[SDK] Fallback model %s matches primary model %s; disabling fallback",
+            fallback_model,
+            primary_model,
+        )
+        return None
+    return fallback_model
+
+
 async def _resolve_model_and_multiplier(
     model: "CopilotLlmModel | None",
     session_id: str,
@@ -2637,6 +2652,8 @@ async def stream_chat_completion_sdk(
             cross_user_cache=_cross_user,
         )
 
+        fallback_model = _resolve_distinct_fallback_model(sdk_model)
+
         sdk_options_kwargs: dict[str, Any] = {
             "system_prompt": system_prompt_value,
             "mcp_servers": {"copilot": mcp_server},
@@ -2646,10 +2663,6 @@ async def stream_chat_completion_sdk(
             "cwd": sdk_cwd,
             "max_buffer_size": config.claude_agent_max_buffer_size,
             "stderr": _on_stderr,
-            # --- P0 guardrails ---
-            # fallback_model: SDK auto-retries with this cheaper model on
-            # 529 (overloaded) errors, avoiding user-visible failures.
-            "fallback_model": _resolve_fallback_model(),
             # max_turns: hard cap on agentic tool-use loops per query to
             # prevent runaway execution from burning budget.
             "max_turns": config.claude_agent_max_turns,
@@ -2663,6 +2676,11 @@ async def stream_chat_completion_sdk(
             # native extended thinking), so it is safe to pass unconditionally.
             "max_thinking_tokens": config.claude_agent_max_thinking_tokens,
         }
+        if fallback_model:
+            # fallback_model: SDK auto-retries with this alternate model on
+            # 529 (overloaded) errors. Omit it entirely when it resolves to
+            # the same value as the primary model because the CLI rejects that.
+            sdk_options_kwargs["fallback_model"] = fallback_model
         # effort: only set for models with extended thinking (Opus).
         # Setting effort on Sonnet causes <internal_reasoning> tag leaks.
         if config.claude_agent_thinking_effort:

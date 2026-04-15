@@ -156,9 +156,10 @@ class ChatConfig(BaseSettings):
         "history compression. Falls back to compression when unavailable.",
     )
     claude_agent_fallback_model: str = Field(
-        default="claude-sonnet-4-6",
+        default="claude-sonnet-4-20250514",
         description="Fallback model when the primary model is unavailable (e.g. 529 "
-        "overloaded). The SDK automatically retries with this cheaper model.",
+        "overloaded). The SDK automatically retries with this alternate model. "
+        "It must differ from the primary model.",
     )
     claude_agent_max_turns: int = Field(
         default=50,
