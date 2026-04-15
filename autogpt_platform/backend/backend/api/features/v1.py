@@ -925,6 +925,24 @@ async def update_subscription_tier(
     # Open-redirect protection: both URLs must point to the configured frontend
     # origin, otherwise an attacker could use our Stripe integration as a
     # redirector to arbitrary phishing sites.
+    #
+    # Fail early with a clear 503 if the server is misconfigured (neither
+    # frontend_base_url nor platform_base_url set), so operators get an
+    # actionable error instead of the misleading "must match the platform
+    # frontend origin" 422 that _validate_checkout_redirect_url would otherwise
+    # produce when `allowed` is empty.
+    if not (settings.config.frontend_base_url or settings.config.platform_base_url):
+        logger.error(
+            "update_subscription_tier: neither frontend_base_url nor "
+            "platform_base_url is configured; cannot validate checkout redirect URLs"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Payment redirect URLs cannot be validated: "
+                "frontend_base_url or platform_base_url must be set on the server."
+            ),
+        )
     if not _validate_checkout_redirect_url(
         request.success_url
     ) or not _validate_checkout_redirect_url(request.cancel_url):
