@@ -10,8 +10,6 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatContainer } from "./components/ChatContainer/ChatContainer";
 import { DeleteChatDialog } from "./components/DeleteChatDialog/DeleteChatDialog";
-import { MobileDrawer } from "./components/MobileDrawer/MobileDrawer";
-import { MobileHeader } from "./components/MobileHeader/MobileHeader";
 import { NotificationBanner } from "./components/NotificationBanner/NotificationBanner";
 import { NotificationDialog } from "./components/NotificationDialog/NotificationDialog";
 import { RateLimitResetDialog } from "./components/RateLimitResetDialog/RateLimitResetDialog";
@@ -90,16 +88,8 @@ export function CopilotPage() {
     hasMoreMessages,
     isLoadingMore,
     loadMore,
-    // Mobile drawer
+    // Mobile
     isMobile,
-    isDrawerOpen,
-    sessions,
-    isLoadingSessions,
-    handleOpenDrawer,
-    handleCloseDrawer,
-    handleDrawerOpenChange,
-    handleSelectSession,
-    handleNewChat,
     // Delete functionality
     sessionToDelete,
     isDeleting,
@@ -165,7 +155,6 @@ export function CopilotPage() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {isMobile && <MobileHeader onOpenDrawer={handleOpenDrawer} />}
       <NotificationBanner />
       {isDryRun && (
         <div className="flex items-center justify-center gap-1.5 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800">
@@ -209,18 +198,6 @@ export function CopilotPage() {
         {!isMobile && isArtifactsEnabled && <ArtifactPanel />}
       </div>
       {isMobile && isArtifactsEnabled && <ArtifactPanel mobile />}
-      {isMobile && (
-        <MobileDrawer
-          isOpen={isDrawerOpen}
-          sessions={sessions}
-          currentSessionId={sessionId}
-          isLoading={isLoadingSessions}
-          onSelectSession={handleSelectSession}
-          onNewChat={handleNewChat}
-          onClose={handleCloseDrawer}
-          onOpenChange={handleDrawerOpenChange}
-        />
-      )}
       {isMobile && (
         <DeleteChatDialog
           session={sessionToDelete}

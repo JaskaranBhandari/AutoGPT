@@ -1,6 +1,5 @@
 "use client";
 
-import { Text } from "@/components/atoms/Text/Text";
 import {
   Popover,
   PopoverContent,
@@ -61,7 +60,12 @@ export function AgentActivityDropdown() {
         </TooltipContent>
       </Tooltip>
 
-      <PopoverContent className="w-80 p-0" side={isSidebarCollapsed ? "right" : "bottom"} align="start" sideOffset={8}>
+      <PopoverContent
+        className="w-80 p-0"
+        side={isSidebarCollapsed ? "right" : "bottom"}
+        align="start"
+        sideOffset={8}
+      >
         <ActivityDropdown
           activeExecutions={activeExecutions}
           recentCompletions={recentCompletions}

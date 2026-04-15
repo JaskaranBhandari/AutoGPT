@@ -1751,20 +1751,60 @@ export const IconAutoGPTLogoMinimal = createIcon((props) => (
       fill="#669CF6"
     />
     <defs>
-      <linearGradient id="paint0_min" x1="62.7328" y1="20.9589" x2="62.7328" y2="33.2932" gradientUnits="userSpaceOnUse">
-        <stop stopColor="#000030" /><stop offset="1" stopColor="#9900FF" />
+      <linearGradient
+        id="paint0_min"
+        x1="62.7328"
+        y1="20.9589"
+        x2="62.7328"
+        y2="33.2932"
+        gradientUnits="userSpaceOnUse"
+      >
+        <stop stopColor="#000030" />
+        <stop offset="1" stopColor="#9900FF" />
       </linearGradient>
-      <linearGradient id="paint1_min" x1="47.5336" y1="20.947" x2="47.5336" y2="33.2951" gradientUnits="userSpaceOnUse">
-        <stop stopColor="#000030" /><stop offset="1" stopColor="#4285F4" />
+      <linearGradient
+        id="paint1_min"
+        x1="47.5336"
+        y1="20.947"
+        x2="47.5336"
+        y2="33.2951"
+        gradientUnits="userSpaceOnUse"
+      >
+        <stop stopColor="#000030" />
+        <stop offset="1" stopColor="#4285F4" />
       </linearGradient>
-      <linearGradient id="paint2_min" x1="69.4138" y1="6.17402" x2="48.0898" y2="-3.94009" gradientUnits="userSpaceOnUse">
-        <stop stopColor="#4285F4" /><stop offset="1" stopColor="#9900FF" />
+      <linearGradient
+        id="paint2_min"
+        x1="69.4138"
+        y1="6.17402"
+        x2="48.0898"
+        y2="-3.94009"
+        gradientUnits="userSpaceOnUse"
+      >
+        <stop stopColor="#4285F4" />
+        <stop offset="1" stopColor="#9900FF" />
       </linearGradient>
-      <linearGradient id="paint3_min" x1="74.2976" y1="15.7136" x2="74.2976" y2="34.5465" gradientUnits="userSpaceOnUse">
-        <stop stopColor="#000030" /><stop offset="1" stopColor="#4285F4" />
+      <linearGradient
+        id="paint3_min"
+        x1="74.2976"
+        y1="15.7136"
+        x2="74.2976"
+        y2="34.5465"
+        gradientUnits="userSpaceOnUse"
+      >
+        <stop stopColor="#000030" />
+        <stop offset="1" stopColor="#4285F4" />
       </linearGradient>
-      <linearGradient id="paint4_min" x1="64.3579" y1="24.1914" x2="65.0886" y2="30.9756" gradientUnits="userSpaceOnUse">
-        <stop stopColor="#4285F4" /><stop offset="1" stopColor="#9900FF" />
+      <linearGradient
+        id="paint4_min"
+        x1="64.3579"
+        y1="24.1914"
+        x2="65.0886"
+        y2="30.9756"
+        gradientUnits="userSpaceOnUse"
+      >
+        <stop stopColor="#4285F4" />
+        <stop offset="1" stopColor="#9900FF" />
       </linearGradient>
     </defs>
   </svg>
