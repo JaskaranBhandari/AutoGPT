@@ -1353,7 +1353,15 @@ async def cancel_stripe_subscription(user_id: str) -> bool:
     Raises stripe.StripeError if any modification fails, so the caller can avoid
     updating the DB tier when Stripe is inconsistent.
     """
-    customer_id = await get_stripe_customer_id(user_id)
+    # Guard: only proceed if the user already has a Stripe customer ID.  Calling
+    # get_stripe_customer_id for a user who has never had a paid subscription would
+    # create an orphaned, potentially-billable Stripe Customer object — we avoid that
+    # by returning False early so the caller can downgrade the DB tier directly.
+    user = await get_user_by_id(user_id)
+    if not user.stripe_customer_id:
+        return False
+
+    customer_id = user.stripe_customer_id
     try:
         cancelled_count = await _cancel_customer_subscriptions(
             customer_id, at_period_end=True

@@ -196,8 +196,9 @@ export function SubscriptionTierSection() {
 
       {currentTier !== "FREE" && isPaymentEnabled && (
         <p className="text-sm text-neutral-500">
-          Your subscription is managed through Stripe. Changes take effect
-          immediately.
+          Your subscription is managed through Stripe. Upgrades and paid-tier
+          changes take effect immediately; downgrades to Free are scheduled for
+          the end of the current billing period.
         </p>
       )}
 
@@ -249,7 +250,9 @@ export function SubscriptionTierSection() {
               subscription.proration_credit_cents > 0 &&
               `Your unused ${currentTier.charAt(0) + currentTier.slice(1).toLowerCase()} subscription ($${(subscription.proration_credit_cents / 100).toFixed(2)}) will be added to your account balance. `}
             You will be redirected to Stripe to complete your upgrade to{" "}
-            {pendingUpgradeTier}.
+            {TIERS.find((t) => t.key === pendingUpgradeTier)?.label ??
+              pendingUpgradeTier}
+            .
           </p>
           <Dialog.Footer>
             <Button
