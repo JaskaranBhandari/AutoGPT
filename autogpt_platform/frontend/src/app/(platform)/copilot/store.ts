@@ -305,8 +305,12 @@ export const useCopilotUIStore = create<CopilotUIState>((set) => ({
       };
     }),
 
-  copilotChatMode: "extended_thinking",
+  copilotChatMode: (() => {
+    const saved = isClient ? storage.get(Key.COPILOT_MODE) : null;
+    return saved === "fast" ? "fast" : "extended_thinking";
+  })(),
   setCopilotChatMode: (mode) => {
+    storage.set(Key.COPILOT_MODE, mode);
     set({ copilotChatMode: mode });
   },
 
@@ -338,6 +342,7 @@ export const useCopilotUIStore = create<CopilotUIState>((set) => ({
     storage.clean(Key.COPILOT_ARTIFACT_PANEL_WIDTH);
     storage.clean(Key.COPILOT_COMPLETED_SESSIONS);
     storage.clean(Key.COPILOT_DRY_RUN);
+    storage.clean(Key.COPILOT_MODE);
     storage.clean(Key.COPILOT_MODEL);
     set({
       completedSessionIDs: new Set<string>(),

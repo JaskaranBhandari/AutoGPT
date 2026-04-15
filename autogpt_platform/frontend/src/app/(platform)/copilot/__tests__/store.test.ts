@@ -175,9 +175,9 @@ describe("useCopilotUIStore", () => {
       );
     });
 
-    it("does not persist mode to localStorage", () => {
+    it("persists mode to localStorage", () => {
       useCopilotUIStore.getState().setCopilotChatMode("fast");
-      expect(window.localStorage.getItem("copilot-mode")).toBeNull();
+      expect(window.localStorage.getItem("copilot-mode")).toBe("fast");
     });
   });
 
@@ -201,6 +201,7 @@ describe("useCopilotUIStore", () => {
         window.localStorage.getItem("copilot-notifications-enabled"),
       ).toBeNull();
       expect(window.localStorage.getItem("copilot-sound-enabled")).toBeNull();
+      expect(window.localStorage.getItem("copilot-mode")).toBeNull();
       expect(
         window.localStorage.getItem("copilot-completed-sessions"),
       ).toBeNull();
