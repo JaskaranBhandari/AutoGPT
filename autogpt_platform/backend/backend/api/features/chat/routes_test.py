@@ -728,6 +728,9 @@ def test_stream_chat_blocks_duplicate_post_returns_empty_sse(
     # The response must contain StreamFinish (type=finish) and the SSE [DONE] terminator.
     assert '"finish"' in body
     assert "[DONE]" in body
+    # The empty SSE response must include the AI SDK protocol header so the
+    # frontend treats it as a valid stream and marks the turn complete.
+    assert response.headers.get("x-vercel-ai-ui-message-stream") == "v1"
     # The duplicate guard must prevent save/enqueue side effects.
     ns.save.assert_not_called()
     ns.enqueue.assert_not_called()

@@ -15,10 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.copilot import service as chat_service
 from backend.copilot import stream_registry
-from backend.copilot.message_dedup import acquire_dedup_lock
 from backend.copilot.config import ChatConfig, CopilotMode
 from backend.copilot.db import get_chat_messages_paginated
 from backend.copilot.executor.utils import enqueue_cancel_task, enqueue_copilot_turn
+from backend.copilot.message_dedup import acquire_dedup_lock
 from backend.copilot.model import (
     ChatMessage,
     ChatSession,

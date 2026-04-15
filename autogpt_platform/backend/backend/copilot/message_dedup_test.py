@@ -1,10 +1,11 @@
 """Unit tests for backend.copilot.message_dedup."""
 
-import pytest
-import pytest_mock
 from unittest.mock import AsyncMock
 
-from backend.copilot.message_dedup import acquire_dedup_lock, _KEY_PREFIX
+import pytest
+import pytest_mock
+
+from backend.copilot.message_dedup import _KEY_PREFIX, acquire_dedup_lock
 
 
 def _patch_redis(mocker: pytest_mock.MockerFixture, *, set_returns):
