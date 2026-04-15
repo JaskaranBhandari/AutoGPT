@@ -910,9 +910,16 @@ async def maybe_compact_cli_session(
         return False
 
     compacted = await compact_transcript(content, model=model, log_prefix=log_prefix)
-    if not compacted or compacted == content:
+    if not compacted:
         logger.warning(
-            "%s Proactive compaction produced no change — keeping original", log_prefix
+            "%s Proactive compaction failed or returned None — keeping original",
+            log_prefix,
+        )
+        return False
+    if compacted == content:
+        logger.warning(
+            "%s Proactive compaction returned identical content — keeping original",
+            log_prefix,
         )
         return False
 

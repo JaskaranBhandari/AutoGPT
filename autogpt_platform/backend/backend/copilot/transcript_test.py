@@ -1443,3 +1443,54 @@ class TestMaybeCompactCliSession:
         assert result is False
         # File should be unchanged.
         assert session_file.read_text(encoding="utf-8") == large_content
+
+    def test_keeps_original_when_compaction_returns_identical_content(self, tmp_path):
+        """If compact_transcript returns the same string as the input, the file is left intact."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from .transcript import (
+            _PROACTIVE_COMPACT_THRESHOLD_BYTES,
+            maybe_compact_cli_session,
+        )
+
+        session_id = "12345678-0000-0000-0000-000000000023"
+        sdk_cwd = str(tmp_path)
+
+        single_pair = (
+            '{"type":"user","uuid":"u1","parentUuid":"","message":{"role":"user","content":"'
+            + ("x" * 1000)
+            + '"}}\n'
+            '{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"id":"msg_a1","role":"assistant","model":"","type":"message","content":[{"type":"text","text":"'
+            + ("y" * 1000)
+            + '"}],"stop_reason":"end_turn","stop_sequence":null}}\n'
+        )
+        repeat = (_PROACTIVE_COMPACT_THRESHOLD_BYTES // len(single_pair.encode())) + 2
+        large_content = single_pair * repeat
+
+        session_file = self._make_session_file(
+            tmp_path, session_id, sdk_cwd, large_content
+        )
+
+        with (
+            patch(
+                "backend.copilot.transcript._projects_base",
+                return_value=str(tmp_path),
+            ),
+            patch(
+                "backend.copilot.transcript.compact_transcript",
+                new_callable=AsyncMock,
+                return_value=large_content,
+            ),
+        ):
+            result = asyncio.run(
+                maybe_compact_cli_session(
+                    sdk_cwd=sdk_cwd,
+                    session_id=session_id,
+                    model="claude-sonnet-4",
+                )
+            )
+
+        assert result is False
+        # File should be unchanged.
+        assert session_file.read_text(encoding="utf-8") == large_content
