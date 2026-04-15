@@ -83,7 +83,13 @@ export function useLoadMoreMessages({
       // Update from parent when initial data changes (e.g. refetch)
       prevInitialOldestRef.current = initialOldestSequence;
       setOldestSequence(initialOldestSequence);
-      setNewestSequence(initialNewestSequence);
+      // Only regress the forward cursor if we haven't paged ahead yet —
+      // otherwise a parent refetch would reset a cursor we already advanced.
+      setNewestSequence((prev) =>
+        prev !== null && prev > (initialNewestSequence ?? -1)
+          ? prev
+          : initialNewestSequence,
+      );
       setHasMore(initialHasMore);
     }
   }, [sessionId, initialOldestSequence, initialNewestSequence, initialHasMore]);

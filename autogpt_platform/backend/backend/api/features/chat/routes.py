@@ -479,6 +479,12 @@ async def get_session(
         SessionDetailResponse: Details for the requested session, including
             active_stream info and pagination metadata.
     """
+    if before_sequence is not None and after_sequence is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="before_sequence and after_sequence are mutually exclusive",
+        )
+
     is_initial_load = before_sequence is None and after_sequence is None
 
     # Check active stream before the DB query on initial loads so we can
