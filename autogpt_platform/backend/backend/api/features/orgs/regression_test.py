@@ -2240,7 +2240,6 @@ class TestPR15MarketplaceOrg:
         assert where_arg["creator_username"] == "testuser"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR15: slug not unique per org")
     async def test_slug_unique_per_org(self):
         """Slugs should be unique per org, not just globally. The schema
         should enforce a composite unique on (slug, owningOrgId)."""
@@ -2390,7 +2389,6 @@ class TestPR15MarketplaceOrg:
             ), "StoreCreator view should have org_name column"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR15: StoreSubmission view missing organization_id")
     async def test_submission_exposes_organization_id(self):
         """The StoreSubmission SQL view should include organization_id
         from the StoreListing's owningOrgId."""
@@ -2929,7 +2927,6 @@ class TestPR18Cutover:
         ), "Route should always set organizationId, not conditionally"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR18: organizationId still nullable")
     async def test_all_agent_graphs_have_organization_id(self):
         """After cutover, AgentGraph.organizationId should be NOT NULL.
         All existing graphs must have been backfilled."""
@@ -2946,7 +2943,6 @@ class TestPR18Cutover:
         ), f"AgentGraph.organizationId should be non-nullable, got {org_type}"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR18: organizationId still nullable")
     async def test_all_executions_have_organization_id(self):
         """After cutover, AgentGraphExecution.organizationId should be
         NOT NULL. All existing executions must have been backfilled."""
@@ -2961,7 +2957,6 @@ class TestPR18Cutover:
         ), f"Execution.organizationId should be non-nullable, got {org_type}"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR18: owningOrgId still nullable")
     async def test_all_store_listings_have_owning_org_id(self):
         """After cutover, StoreListing.owningOrgId should be NOT NULL."""
         import typing
@@ -2975,7 +2970,6 @@ class TestPR18Cutover:
         ), f"StoreListing.owningOrgId should be non-nullable, got {org_type}"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR18: Creator view not org-aware")
     async def test_creator_view_resolves_org_profile(self):
         """After cutover, StoreCreator view should resolve the org profile
         (org name, org avatar) for org-owned listings."""
@@ -2999,7 +2993,6 @@ class TestPR18Cutover:
         ), "StoreCreator view should have org_name column after cutover"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR18: StoreAgent view not org-aware")
     async def test_store_agent_view_includes_org_id(self):
         """After cutover, StoreAgent view should include owning_org_id."""
         from prisma.models import StoreAgent
@@ -3010,7 +3003,6 @@ class TestPR18Cutover:
         ), "StoreAgent Prisma model should have owning_org_id column"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(reason="PR18: StoreSubmission view not org-aware")
     async def test_store_submission_view_includes_org_id(self):
         """After cutover, StoreSubmission view should include
         organization_id."""

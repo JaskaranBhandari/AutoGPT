@@ -321,8 +321,8 @@ model AgentGraph {
   LibraryAgents        LibraryAgent[]
   StoreListingVersions StoreListingVersion[]
 
-  // Tenancy columns (nullable during migration, NOT NULL after cutover)
-  organizationId String?
+  // Tenancy columns
+  organizationId String
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
   Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
@@ -641,7 +641,7 @@ model AgentGraphExecution {
   sharedAt   DateTime?
 
   // Tenancy
-  organizationId String?
+  organizationId String
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
   Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
@@ -1043,6 +1043,8 @@ view StoreAgent {
 
   recommended_schedule_cron String?
 
+  owning_org_id String?
+
   // Materialized views used (refreshed every 15 minutes via pg_cron):
   // - mv_agent_run_counts - Pre-aggregated agent execution counts by agentGraphId
   //   * idx_mv_agent_run_counts (UNIQUE on agentGraphId) - Primary lookup
@@ -1089,6 +1091,26 @@ view StoreSubmission {
   run_count         Int
   review_count      Int
   review_avg_rating Float
+
+  organization_id String?
+}
+
+// StoreCreator view — like Creator but with org_name for org-owned listings
+view StoreCreator {
+  username    String @unique
+  name        String
+  avatar_url  String
+  description String
+
+  top_categories String[]
+  links          String[]
+
+  num_agents   Int
+  agent_rating Float
+  agent_runs   Int
+  is_featured  Boolean
+
+  org_name String?
 }
 
 // Note: This is actually a MATERIALIZED VIEW in the database
@@ -1158,11 +1180,11 @@ model StoreListing {
   // Relations
   Versions StoreListingVersion[] @relation("ListingVersions")
 
-  // Tenancy — owningOrgId will replace owningUserId as canonical owner after cutover
-  owningOrgId String?
-  OwningOrg   Organization? @relation("OrgStoreListings", fields: [owningOrgId], references: [id])
+  // Tenancy — owningOrgId is the canonical owner
+  owningOrgId String
+  OwningOrg   Organization @relation("OrgStoreListings", fields: [owningOrgId], references: [id])
 
-  @@unique([owningUserId, slug])
+  @@unique([owningOrgId, slug])
   // Used in the view query
   @@index([isDeleted, hasApprovedVersion])
   @@index([owningOrgId])
