@@ -665,6 +665,17 @@ async def append_and_save_message(session_id: str, message: ChatMessage) -> Chat
         if session is None:
             raise ValueError(f"Session {session_id} not found")
 
+        # Idempotency: skip if last message is identical (infra/nginx retry).
+        # The cluster lock in the executor prevents duplicate execution;
+        # this prevents the duplicate DB write that would occur before
+        # the executor even picks up the task.
+        if (
+            session.messages
+            and session.messages[-1].role == message.role
+            and session.messages[-1].content == message.content
+        ):
+            return session
+
         session.messages.append(message)
         existing_message_count = await chat_db().get_next_sequence(session_id)
 

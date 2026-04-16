@@ -18,7 +18,6 @@ from backend.copilot import stream_registry
 from backend.copilot.config import ChatConfig, CopilotLlmModel, CopilotMode
 from backend.copilot.db import get_chat_messages_paginated
 from backend.copilot.executor.utils import enqueue_cancel_task, enqueue_copilot_turn
-from backend.copilot.message_dedup import acquire_dedup_lock
 from backend.copilot.model import (
     ChatMessage,
     ChatSession,
@@ -846,9 +845,6 @@ async def stream_chat_post(
     # Also sanitise file_ids so only validated, workspace-scoped IDs are
     # forwarded downstream (e.g. to the executor via enqueue_copilot_turn).
     sanitized_file_ids: list[str] | None = None
-    # Capture the original message text BEFORE any mutation (attachment enrichment)
-    # so the idempotency hash is stable across retries.
-    original_message = request.message
     if request.file_ids and user_id:
         # Filter to valid UUIDs only to prevent DB abuse
         valid_ids = [fid for fid in request.file_ids if _UUID_RE.match(fid)]
@@ -877,38 +873,10 @@ async def stream_chat_post(
                 )
                 request.message += files_block
 
-    # ── Idempotency guard ────────────────────────────────────────────────────
-    # Blocks duplicate executor tasks from concurrent/retried POSTs.
-    # See backend/copilot/message_dedup.py for the full lifecycle description.
-    dedup_lock = None
-    if request.is_user_message:
-        dedup_lock = await acquire_dedup_lock(
-            session_id, original_message, sanitized_file_ids
-        )
-        if dedup_lock is None and (original_message or sanitized_file_ids):
-
-            async def _empty_sse() -> AsyncGenerator[str, None]:
-                yield StreamFinish().to_sse()
-                yield "data: [DONE]\n\n"
-
-            return StreamingResponse(
-                _empty_sse(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "X-Accel-Buffering": "no",
-                    "Connection": "keep-alive",
-                    "x-vercel-ai-ui-message-stream": "v1",
-                },
-            )
-
     # Atomically append user message to session BEFORE creating task to avoid
     # race condition where GET_SESSION sees task as "running" but message isn't
-    # saved yet.  append_and_save_message re-fetches inside a lock to prevent
-    # message loss from concurrent requests.
-    #
-    # If any of these operations raises, release the dedup lock before propagating
-    # so subsequent retries are not blocked for 30 s.
+    # saved yet.  append_and_save_message is idempotent — duplicate POSTs with
+    # the same content are silently skipped at the DB layer.
     try:
         if request.message:
             message = ChatMessage(
@@ -959,8 +927,6 @@ async def stream_chat_post(
             model=request.model,
         )
     except Exception:
-        if dedup_lock:
-            await dedup_lock.release()
         raise
 
     setup_time = (time.perf_counter() - stream_start_time) * 1000
@@ -985,13 +951,6 @@ async def stream_chat_post(
         subscriber_queue = None
         first_chunk_yielded = False
         chunks_yielded = 0
-        # On client disconnect the message is already persisted in the DB but
-        # the executor hasn't yet acquired its cluster lock. Releasing the dedup
-        # lock immediately would let an infra retry (k8s, nginx) re-save the
-        # same message before the cluster lock blocks it, causing a duplicate
-        # DB entry. The 5 s TTL covers the ~1 s RabbitMQ-transit window.
-        # All other exits (normal finish, error) release immediately.
-        release_dedup_lock_on_exit = True
         try:
             # Subscribe from the position we captured before enqueuing
             # This avoids replaying old messages while catching all new ones
@@ -1061,7 +1020,6 @@ async def stream_chat_post(
                     }
                 },
             )
-            release_dedup_lock_on_exit = False
         except Exception as e:
             elapsed = (time_module.perf_counter() - event_gen_start) * 1000
             logger.error(
@@ -1077,8 +1035,6 @@ async def stream_chat_post(
             ).to_sse()
             yield StreamFinish().to_sse()
         finally:
-            if dedup_lock and release_dedup_lock_on_exit:
-                await dedup_lock.release()
             # Unsubscribe when client disconnects or stream ends
             if subscriber_queue is not None:
                 try:
