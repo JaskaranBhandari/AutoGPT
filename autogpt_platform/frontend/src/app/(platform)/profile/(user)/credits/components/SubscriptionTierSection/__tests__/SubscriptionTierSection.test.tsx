@@ -373,6 +373,7 @@ describe("SubscriptionTierSection", () => {
       screen.queryByRole("button", { name: /continue to checkout/i }),
     ).toBeNull();
     // Dialog body should mention "take effect immediately" not "redirected to Stripe"
-    expect(screen.getByText(/take effect immediately/i)).toBeDefined();
+    // Two elements match: the static info paragraph and the dialog body — verify at least 2
+    expect(screen.getAllByText(/take effect immediately/i).length).toBeGreaterThanOrEqual(2);
   });
 });
