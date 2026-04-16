@@ -1552,9 +1552,8 @@ async def _cleanup_stale_subscriptions(customer_id: str, new_sub_id: str) -> Non
 
     NOTE: until that reconcile job lands, a failure here means the user is silently
     billed for two simultaneous subscriptions. The error log below is intentionally
-    `logger.exception` so it surfaces in Sentry with the customer/sub IDs needed to
-    manually reconcile, and the metric `stripe_stale_subscription_cleanup_failed`
-    is bumped so on-call can alert on persistent drift.
+    `logger.exception` (not `logger.warning`) so it surfaces as an error in Sentry
+    with the customer/sub IDs needed for manual reconciliation.
     TODO(#stripe-reconcile-job): replace this best-effort cleanup with a periodic
     reconciliation job that queries Stripe for customers with >1 active sub.
     """
@@ -1824,16 +1823,16 @@ async def handle_subscription_payment_failure(invoice: dict) -> None:
         # Balance covered the invoice. Pay the Stripe invoice so Stripe's dunning
         # system stops retrying it — without this call Stripe would retry automatically
         # and re-trigger this webhook, causing double-deductions each retry cycle.
-        if invoice_id:
-            try:
-                await run_in_threadpool(stripe.Invoice.pay, invoice_id)
-            except stripe.StripeError:
-                logger.warning(
-                    "handle_subscription_payment_failure: balance deducted for user"
-                    " %s but failed to mark invoice %s as paid; Stripe may retry",
-                    user.id,
-                    invoice_id,
-                )
+        # invoice_id is guaranteed non-empty here (early-return guard above).
+        try:
+            await run_in_threadpool(stripe.Invoice.pay, invoice_id)
+        except stripe.StripeError:
+            logger.warning(
+                "handle_subscription_payment_failure: balance deducted for user"
+                " %s but failed to mark invoice %s as paid; Stripe may retry",
+                user.id,
+                invoice_id,
+            )
         logger.info(
             "handle_subscription_payment_failure: deducted %d cents from balance"
             " for user %s; Stripe invoice %s paid, sub %s intact, tier preserved",
