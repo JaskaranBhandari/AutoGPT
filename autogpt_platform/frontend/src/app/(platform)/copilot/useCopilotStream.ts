@@ -158,7 +158,6 @@ export function useCopilotStream({
       const capturedEpoch = sessionEpochRef.current;
       reconnectTimeoutTimerRef.current = setTimeout(() => {
         if (sessionEpochRef.current !== capturedEpoch) return;
-        if (!isReconnectScheduledRef.current) return;
         setReconnectExhausted(true);
         reconnectStartedAtRef.current = null;
         toast({
@@ -551,7 +550,17 @@ export function useCopilotStream({
     prevStatusRef.current = status;
 
     const wasActive = prev === "streaming" || prev === "submitted";
+    const isNowActive = status === "streaming" || status === "submitted";
     const isIdle = status === "ready" || status === "error";
+
+    // Clear the forced reconnect timeout as soon as the stream resumes —
+    // otherwise the stale 30s timer can fire mid-stream and show a
+    // "timed out" toast even though reconnection succeeded.
+    if (isNowActive && reconnectStartedAtRef.current !== null) {
+      reconnectStartedAtRef.current = null;
+      clearTimeout(reconnectTimeoutTimerRef.current);
+      reconnectTimeoutTimerRef.current = undefined;
+    }
 
     if (wasActive && isIdle && sessionId && !isReconnectScheduled) {
       queryClient.invalidateQueries({
@@ -584,7 +593,7 @@ export function useCopilotStream({
   useEffect(() => {
     if (!sessionId) return;
     if (!hasActiveStream) return;
-    if (!hydratedMessages || hydratedMessages.length === 0) return;
+    if (!hydratedMessages) return;
 
     // Never resume if currently streaming
     if (status === "streaming" || status === "submitted") return;
