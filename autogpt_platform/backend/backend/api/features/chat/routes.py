@@ -875,8 +875,9 @@ async def stream_chat_post(
 
     # Atomically append user message to session BEFORE creating task to avoid
     # race condition where GET_SESSION sees task as "running" but message isn't
-    # saved yet.  append_and_save_message is idempotent — duplicate POSTs with
-    # the same content are silently skipped at the DB layer.
+    # saved yet.  append_and_save_message returns None when a duplicate is
+    # detected — in that case skip enqueue to avoid processing the message twice.
+    is_duplicate_message = False
     try:
         if request.message:
             message = ChatMessage(
@@ -890,7 +891,8 @@ async def stream_chat_post(
                     message_length=len(request.message),
                 )
             logger.info(f"[STREAM] Saving user message to session {session_id}")
-            await append_and_save_message(session_id, message)
+            saved = await append_and_save_message(session_id, message)
+            is_duplicate_message = saved is None
             logger.info(f"[STREAM] User message saved for session {session_id}")
 
         # Create a task in the stream registry for reconnection support
@@ -915,17 +917,22 @@ async def stream_chat_post(
             },
         )
 
-        await enqueue_copilot_turn(
-            session_id=session_id,
-            user_id=user_id,
-            message=request.message,
-            turn_id=turn_id,
-            is_user_message=request.is_user_message,
-            context=request.context,
-            file_ids=sanitized_file_ids,
-            mode=request.mode,
-            model=request.model,
-        )
+        if not is_duplicate_message:
+            await enqueue_copilot_turn(
+                session_id=session_id,
+                user_id=user_id,
+                message=request.message,
+                turn_id=turn_id,
+                is_user_message=request.is_user_message,
+                context=request.context,
+                file_ids=sanitized_file_ids,
+                mode=request.mode,
+                model=request.model,
+            )
+        else:
+            logger.info(
+                f"[STREAM] Duplicate message detected for session {session_id}, skipping enqueue"
+            )
     except Exception:
         raise
 

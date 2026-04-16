@@ -647,8 +647,14 @@ async def _save_session_to_db(
             msg.sequence = existing_message_count + i
 
 
-async def append_and_save_message(session_id: str, message: ChatMessage) -> ChatSession:
+async def append_and_save_message(
+    session_id: str, message: ChatMessage
+) -> ChatSession | None:
     """Atomically append a message to a session and persist it.
+
+    Returns the updated session, or None if the message was detected as a
+    duplicate (idempotency guard). Callers must check for None and skip any
+    downstream work (e.g. enqueuing a new LLM turn) when a duplicate is detected.
 
     Uses _get_session_lock (Redis NX) to serialise concurrent writers across replicas.
     The idempotency check below provides a last-resort guard when the lock degrades.
@@ -676,7 +682,7 @@ async def append_and_save_message(session_id: str, message: ChatMessage) -> Chat
             and session.messages[-1].role == message.role
             and session.messages[-1].content == message.content
         ):
-            return session
+            return None  # duplicate — caller should skip enqueue
 
         session.messages.append(message)
         existing_message_count = await chat_db().get_next_sequence(session_id)
