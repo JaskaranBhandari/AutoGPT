@@ -1,9 +1,21 @@
 """Tests for platform bot linking API routes."""
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+
+
+@asynccontextmanager
+async def _fake_transaction():
+    """Stub for backend.data.db.transaction used in route tests.
+
+    The real transaction() opens a Prisma tx which binds asyncio primitives to
+    the running event loop. Tests run in their own loops via pytest-asyncio, so
+    we swap this in to avoid cross-loop errors.
+    """
+    yield MagicMock()
 
 from backend.api.features.platform_linking.auth import check_bot_api_key
 from backend.api.features.platform_linking.models import (
@@ -301,6 +313,10 @@ class TestCreateLinkTokenEndpoint:
             patch(
                 "backend.api.features.platform_linking.routes.find_server_link",
                 new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "backend.api.features.platform_linking.routes.transaction",
+                new=_fake_transaction,
             ),
             patch(
                 "backend.api.features.platform_linking.routes.PlatformLinkToken"
