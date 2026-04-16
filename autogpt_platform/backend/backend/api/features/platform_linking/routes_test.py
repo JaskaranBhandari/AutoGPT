@@ -23,11 +23,14 @@ from backend.api.features.platform_linking.models import (
     BotChatRequest,
     ConfirmLinkResponse,
     CreateLinkTokenRequest,
+    CreateUserLinkTokenRequest,
     DeleteLinkResponse,
     LinkTokenStatusResponse,
+    LinkType,
     Platform,
     ResolveResponse,
     ResolveServerRequest,
+    ResolveUserRequest,
 )
 
 
@@ -362,4 +365,527 @@ class TestCreateLinkTokenEndpoint:
                     x_bot_api_key="testkey",
                 )
 
+        assert exc_info.value.status_code == 409
+
+
+class TestCreateUserLinkTokenEndpoint:
+    @pytest.mark.asyncio
+    @patch.dict("os.environ", {"PLATFORM_BOT_API_KEY": "testkey"}, clear=False)
+    async def test_create_user_token_for_unlinked_user(self):
+        from backend.api.features.platform_linking.routes import create_user_link_token
+
+        with (
+            patch(
+                "backend.api.features.platform_linking.routes.find_user_link",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "backend.api.features.platform_linking.routes.transaction",
+                new=_fake_transaction,
+            ),
+            patch(
+                "backend.api.features.platform_linking.routes.PlatformLinkToken"
+            ) as mock_token_model,
+        ):
+            mock_token_model.prisma.return_value.update_many = AsyncMock(return_value=0)
+            mock_token_model.prisma.return_value.create = AsyncMock(
+                return_value=MagicMock()
+            )
+
+            result = await create_user_link_token(
+                CreateUserLinkTokenRequest(
+                    platform=Platform.DISCORD,
+                    platform_user_id="user_456",
+                    platform_username="Bently",
+                ),
+                x_bot_api_key="testkey",
+            )
+
+        assert result.token
+        assert result.token in result.link_url
+        assert "?platform=DISCORD" in result.link_url
+
+    @pytest.mark.asyncio
+    @patch.dict("os.environ", {"PLATFORM_BOT_API_KEY": "testkey"}, clear=False)
+    async def test_create_user_token_409_if_already_linked(self):
+        from backend.api.features.platform_linking.routes import create_user_link_token
+
+        with patch(
+            "backend.api.features.platform_linking.routes.find_user_link",
+            new=AsyncMock(return_value=MagicMock()),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await create_user_link_token(
+                    CreateUserLinkTokenRequest(
+                        platform=Platform.DISCORD,
+                        platform_user_id="user_already_linked",
+                    ),
+                    x_bot_api_key="testkey",
+                )
+
+        assert exc_info.value.status_code == 409
+
+
+class TestResolveUserEndpoint:
+    @pytest.mark.asyncio
+    @patch.dict("os.environ", {"PLATFORM_BOT_API_KEY": "testkey"}, clear=False)
+    async def test_resolve_linked_user(self):
+        from backend.api.features.platform_linking.routes import resolve_platform_user
+
+        with patch(
+            "backend.api.features.platform_linking.routes.find_user_link",
+            new=AsyncMock(return_value=MagicMock(userId="autogpt-user-xyz")),
+        ):
+            result = await resolve_platform_user(
+                ResolveUserRequest(
+                    platform=Platform.DISCORD,
+                    platform_user_id="user_456",
+                ),
+                x_bot_api_key="testkey",
+            )
+
+        assert result.linked is True
+
+    @pytest.mark.asyncio
+    @patch.dict("os.environ", {"PLATFORM_BOT_API_KEY": "testkey"}, clear=False)
+    async def test_resolve_unlinked_user(self):
+        from backend.api.features.platform_linking.routes import resolve_platform_user
+
+        with patch(
+            "backend.api.features.platform_linking.routes.find_user_link",
+            new=AsyncMock(return_value=None),
+        ):
+            result = await resolve_platform_user(
+                ResolveUserRequest(
+                    platform=Platform.DISCORD,
+                    platform_user_id="user_unknown",
+                ),
+                x_bot_api_key="testkey",
+            )
+
+        assert result.linked is False
+
+
+class TestGetLinkTokenStatusEndpoint:
+    """Tests for /tokens/{token}/status — pending / linked / expired / 404."""
+
+    @pytest.mark.asyncio
+    @patch.dict("os.environ", {"PLATFORM_BOT_API_KEY": "testkey"}, clear=False)
+    async def test_not_found(self):
+        from backend.api.features.platform_linking.routes import get_link_token_status
+
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(return_value=None)
+            with pytest.raises(HTTPException) as exc_info:
+                await get_link_token_status(token="abc123", x_bot_api_key="testkey")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    @patch.dict("os.environ", {"PLATFORM_BOT_API_KEY": "testkey"}, clear=False)
+    async def test_pending(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.api.features.platform_linking.routes import get_link_token_status
+
+        future = datetime.now(timezone.utc) + timedelta(minutes=10)
+        fake_token = MagicMock(usedAt=None, expiresAt=future)
+
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            result = await get_link_token_status(
+                token="abc123", x_bot_api_key="testkey"
+            )
+
+        assert result.status == "pending"
+
+    @pytest.mark.asyncio
+    @patch.dict("os.environ", {"PLATFORM_BOT_API_KEY": "testkey"}, clear=False)
+    async def test_expired_by_time(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.api.features.platform_linking.routes import get_link_token_status
+
+        past = datetime.now(timezone.utc) - timedelta(minutes=10)
+        fake_token = MagicMock(usedAt=None, expiresAt=past)
+
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            result = await get_link_token_status(
+                token="abc123", x_bot_api_key="testkey"
+            )
+
+        assert result.status == "expired"
+
+    @pytest.mark.asyncio
+    @patch.dict("os.environ", {"PLATFORM_BOT_API_KEY": "testkey"}, clear=False)
+    async def test_used_with_user_link_reports_linked(self):
+        from datetime import datetime, timezone
+
+        from backend.api.features.platform_linking.routes import get_link_token_status
+
+        fake_token = MagicMock(
+            usedAt=datetime.now(timezone.utc),
+            linkType=LinkType.USER.value,
+            platform="DISCORD",
+            platformUserId="user_456",
+        )
+
+        with (
+            patch(
+                "backend.api.features.platform_linking.routes.PlatformLinkToken"
+            ) as mock_model,
+            patch(
+                "backend.api.features.platform_linking.routes.find_user_link",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+        ):
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            result = await get_link_token_status(
+                token="abc123", x_bot_api_key="testkey"
+            )
+
+        assert result.status == "linked"
+
+    @pytest.mark.asyncio
+    @patch.dict("os.environ", {"PLATFORM_BOT_API_KEY": "testkey"}, clear=False)
+    async def test_used_without_link_reports_expired(self):
+        """A superseded token has usedAt set but no actual link row."""
+        from datetime import datetime, timezone
+
+        from backend.api.features.platform_linking.routes import get_link_token_status
+
+        fake_token = MagicMock(
+            usedAt=datetime.now(timezone.utc),
+            linkType=LinkType.SERVER.value,
+            platform="DISCORD",
+            platformServerId="guild_123",
+        )
+
+        with (
+            patch(
+                "backend.api.features.platform_linking.routes.PlatformLinkToken"
+            ) as mock_model,
+            patch(
+                "backend.api.features.platform_linking.routes.find_server_link",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            result = await get_link_token_status(
+                token="abc123", x_bot_api_key="testkey"
+            )
+
+        assert result.status == "expired"
+
+
+class TestGetLinkTokenInfoEndpoint:
+    """Tests for /tokens/{token}/info — no-auth display endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_not_found(self):
+        from backend.api.features.platform_linking.routes import get_link_token_info
+
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(return_value=None)
+            with pytest.raises(HTTPException) as exc_info:
+                await get_link_token_info(token="abc123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_used_returns_404(self):
+        from datetime import datetime, timezone
+
+        from backend.api.features.platform_linking.routes import get_link_token_info
+
+        fake_token = MagicMock(usedAt=datetime.now(timezone.utc))
+
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await get_link_token_info(token="abc123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_expired_returns_410(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.api.features.platform_linking.routes import get_link_token_info
+
+        past = datetime.now(timezone.utc) - timedelta(minutes=5)
+        fake_token = MagicMock(usedAt=None, expiresAt=past)
+
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await get_link_token_info(token="abc123")
+        assert exc_info.value.status_code == 410
+
+    @pytest.mark.asyncio
+    async def test_success_returns_display_info(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.api.features.platform_linking.routes import get_link_token_info
+
+        future = datetime.now(timezone.utc) + timedelta(minutes=10)
+        fake_token = MagicMock(
+            usedAt=None,
+            expiresAt=future,
+            platform="DISCORD",
+            linkType=LinkType.SERVER.value,
+            serverName="My Server",
+        )
+
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            result = await get_link_token_info(token="abc123")
+
+        assert result.platform == "DISCORD"
+        assert result.link_type == LinkType.SERVER
+        assert result.server_name == "My Server"
+
+
+class TestConfirmLinkTokenEndpoint:
+    """Tests for /tokens/{token}/confirm — the JWT-authed server-link confirmation."""
+
+    @pytest.mark.asyncio
+    async def test_not_found(self):
+        from backend.api.features.platform_linking.routes import confirm_link_token
+
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(return_value=None)
+            with pytest.raises(HTTPException) as exc_info:
+                await confirm_link_token(token="abc", user_id="user-1")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_wrong_link_type_rejected(self):
+        from backend.api.features.platform_linking.routes import confirm_link_token
+
+        fake_token = MagicMock(linkType=LinkType.USER.value)
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await confirm_link_token(token="abc", user_id="user-1")
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_already_used(self):
+        from datetime import datetime, timezone
+
+        from backend.api.features.platform_linking.routes import confirm_link_token
+
+        fake_token = MagicMock(
+            linkType=LinkType.SERVER.value,
+            usedAt=datetime.now(timezone.utc),
+        )
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await confirm_link_token(token="abc", user_id="user-1")
+        assert exc_info.value.status_code == 410
+
+    @pytest.mark.asyncio
+    async def test_expired(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.api.features.platform_linking.routes import confirm_link_token
+
+        fake_token = MagicMock(
+            linkType=LinkType.SERVER.value,
+            usedAt=None,
+            expiresAt=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await confirm_link_token(token="abc", user_id="user-1")
+        assert exc_info.value.status_code == 410
+
+    @pytest.mark.asyncio
+    async def test_already_linked_to_same_user(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.api.features.platform_linking.routes import confirm_link_token
+
+        fake_token = MagicMock(
+            linkType=LinkType.SERVER.value,
+            usedAt=None,
+            expiresAt=datetime.now(timezone.utc) + timedelta(minutes=10),
+            platform="DISCORD",
+            platformServerId="guild_123",
+        )
+        existing = MagicMock(userId="user-1")
+
+        with (
+            patch(
+                "backend.api.features.platform_linking.routes.PlatformLinkToken"
+            ) as mock_model,
+            patch(
+                "backend.api.features.platform_linking.routes.find_server_link",
+                new=AsyncMock(return_value=existing),
+            ),
+        ):
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await confirm_link_token(token="abc", user_id="user-1")
+        assert exc_info.value.status_code == 409
+        assert "your account" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_already_linked_to_other_user(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.api.features.platform_linking.routes import confirm_link_token
+
+        fake_token = MagicMock(
+            linkType=LinkType.SERVER.value,
+            usedAt=None,
+            expiresAt=datetime.now(timezone.utc) + timedelta(minutes=10),
+            platform="DISCORD",
+            platformServerId="guild_123",
+        )
+        existing = MagicMock(userId="other-user")
+
+        with (
+            patch(
+                "backend.api.features.platform_linking.routes.PlatformLinkToken"
+            ) as mock_model,
+            patch(
+                "backend.api.features.platform_linking.routes.find_server_link",
+                new=AsyncMock(return_value=existing),
+            ),
+        ):
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await confirm_link_token(token="abc", user_id="user-1")
+        assert exc_info.value.status_code == 409
+        assert "another" in exc_info.value.detail
+
+
+class TestConfirmUserLinkTokenEndpoint:
+    """Tests for /user-tokens/{token}/confirm — DM link confirmation."""
+
+    @pytest.mark.asyncio
+    async def test_not_found(self):
+        from backend.api.features.platform_linking.routes import confirm_user_link_token
+
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(return_value=None)
+            with pytest.raises(HTTPException) as exc_info:
+                await confirm_user_link_token(token="abc", user_id="user-1")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_wrong_link_type_rejected(self):
+        from backend.api.features.platform_linking.routes import confirm_user_link_token
+
+        fake_token = MagicMock(linkType=LinkType.SERVER.value)
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await confirm_user_link_token(token="abc", user_id="user-1")
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_expired(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.api.features.platform_linking.routes import confirm_user_link_token
+
+        fake_token = MagicMock(
+            linkType=LinkType.USER.value,
+            usedAt=None,
+            expiresAt=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        with patch(
+            "backend.api.features.platform_linking.routes.PlatformLinkToken"
+        ) as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await confirm_user_link_token(token="abc", user_id="user-1")
+        assert exc_info.value.status_code == 410
+
+    @pytest.mark.asyncio
+    async def test_already_linked_to_other_user(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.api.features.platform_linking.routes import confirm_user_link_token
+
+        fake_token = MagicMock(
+            linkType=LinkType.USER.value,
+            usedAt=None,
+            expiresAt=datetime.now(timezone.utc) + timedelta(minutes=10),
+            platform="DISCORD",
+            platformUserId="user_456",
+        )
+        existing = MagicMock(userId="other-user")
+
+        with (
+            patch(
+                "backend.api.features.platform_linking.routes.PlatformLinkToken"
+            ) as mock_model,
+            patch(
+                "backend.api.features.platform_linking.routes.find_user_link",
+                new=AsyncMock(return_value=existing),
+            ),
+        ):
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await confirm_user_link_token(token="abc", user_id="user-1")
         assert exc_info.value.status_code == 409
