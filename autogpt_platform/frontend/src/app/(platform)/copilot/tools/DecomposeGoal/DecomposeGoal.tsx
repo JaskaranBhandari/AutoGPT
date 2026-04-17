@@ -199,8 +199,9 @@ export function DecomposeGoalTool({
     const deadlineMs = createdAt
       ? new Date(createdAt).getTime() + countdownSeconds * 1000
       : null;
+    const hasDeadline = deadlineMs !== null && !Number.isNaN(deadlineMs);
     function recompute() {
-      if (deadlineMs !== null && !Number.isNaN(deadlineMs)) {
+      if (hasDeadline) {
         const remaining = Math.max(
           0,
           Math.round((deadlineMs - Date.now()) / 1000),
@@ -211,7 +212,10 @@ export function DecomposeGoalTool({
         setSecondsLeft((s) => Math.max(0, s - 1));
       }
     }
-    recompute();
+    // Only correct stale state for deadline-driven sessions. The legacy
+    // fallback starts from the seeded ``secondsLeft`` and should not
+    // decrement before the first 1s tick elapses.
+    if (hasDeadline) recompute();
     const interval = setInterval(recompute, 1000);
     document.addEventListener("visibilitychange", recompute);
     return () => {
