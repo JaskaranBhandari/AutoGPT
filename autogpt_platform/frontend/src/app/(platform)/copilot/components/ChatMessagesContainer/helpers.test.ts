@@ -25,6 +25,20 @@ function toolPart(
   } as unknown as MessagePart;
 }
 
+function interactiveToolPart(
+  toolName: string,
+  responseType: string,
+): MessagePart {
+  return {
+    type: `tool-${toolName}`,
+    state: "output-available",
+    toolCallId: `call-${toolName}`,
+    toolName,
+    args: {},
+    output: { type: responseType },
+  } as unknown as MessagePart;
+}
+
 describe("extractWorkspaceArtifacts", () => {
   it("extracts a single workspace:// link with its markdown title", () => {
     const text =
@@ -250,5 +264,65 @@ describe("splitReasoningAndResponse", () => {
     expect((result.response[0] as { text: string }).text).toBe(
       "I found it! Let me run it.",
     );
+  });
+
+  it("returns empty arrays for an empty parts list", () => {
+    const result = splitReasoningAndResponse([]);
+    expect(result.reasoning).toEqual([]);
+    expect(result.response).toEqual([]);
+  });
+
+  it("pins interactive reasoning tools into the response (object output)", () => {
+    const askQuestion = interactiveToolPart(
+      "ask_question",
+      "input_validation_error",
+    );
+    const parts = [
+      textPart("Let me check..."),
+      askQuestion,
+      textPart("Here's the result"),
+    ];
+    const result = splitReasoningAndResponse(parts);
+    // Non-interactive reasoning (the text) stays in reasoning; the interactive
+    // tool is pinned to the front of the response so it remains visible.
+    expect(result.reasoning).toEqual([parts[0]]);
+    expect(result.response).toHaveLength(2);
+    expect(result.response[0]).toBe(askQuestion);
+    expect((result.response[1] as { text: string }).text).toBe(
+      "Here's the result",
+    );
+  });
+
+  it("pins interactive reasoning tools even when output is a JSON string", () => {
+    const askQuestion = {
+      type: "tool-ask_question",
+      state: "output-available",
+      toolCallId: "call-ask_question",
+      toolName: "ask_question",
+      args: {},
+      output: JSON.stringify({ type: "need_login" }),
+    } as unknown as MessagePart;
+    const parts = [
+      toolPart("find_block"),
+      askQuestion,
+      textPart("Please log in and try again"),
+    ];
+    const result = splitReasoningAndResponse(parts);
+    expect(result.reasoning).toEqual([parts[0]]);
+    expect(result.response).toHaveLength(2);
+    expect(result.response[0]).toBe(askQuestion);
+  });
+
+  it("keeps non-interactive reasoning tools in reasoning", () => {
+    const parts = [
+      toolPart("find_block"),
+      toolPart("search_docs"),
+      textPart("Answer"),
+    ];
+    const result = splitReasoningAndResponse(parts);
+    expect(result.reasoning).toHaveLength(2);
+    expect(result.reasoning[0]).toBe(parts[0]);
+    expect(result.reasoning[1]).toBe(parts[1]);
+    expect(result.response).toHaveLength(1);
   });
 });
