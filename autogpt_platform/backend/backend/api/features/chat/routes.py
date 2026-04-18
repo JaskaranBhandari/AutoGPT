@@ -50,6 +50,7 @@ from backend.copilot.tools.models import (
     AgentPreviewResponse,
     AgentSavedResponse,
     AgentsFoundResponse,
+    BackgroundToolList,
     BackgroundToolStatus,
     BlockDetailsResponse,
     BlockListResponse,
@@ -1325,6 +1326,7 @@ ToolResponseUnion = (
     | MemoryForgetCandidatesResponse
     | MemoryForgetConfirmResponse
     | BackgroundToolStatus
+    | BackgroundToolList
 )
 
 

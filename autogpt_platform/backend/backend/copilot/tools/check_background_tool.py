@@ -8,6 +8,7 @@ stays in control rather than the handler making an irreversible choice.
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from backend.copilot.model import ChatSession
@@ -16,11 +17,18 @@ from backend.copilot.sdk.background_registry import (
 )
 from backend.copilot.sdk.background_registry import (
     get_background_task,
+    list_background_tasks,
     unregister_background_task,
 )
 
 from .base import BaseTool
-from .models import BackgroundToolStatus, ErrorResponse, ToolResponseBase
+from .models import (
+    BackgroundToolList,
+    BackgroundToolListEntry,
+    BackgroundToolStatus,
+    ErrorResponse,
+    ToolResponseBase,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +39,14 @@ class CheckBackgroundToolTool(BaseTool):
     @property
     def name(self) -> str:
         return "check_background_tool"
+
+    @property
+    def requires_auth(self) -> bool:
+        # Parked tasks almost always originate from authenticated tools
+        # (run_agent, run_block). Require auth here too for consistency
+        # with those tools even though ContextVar scoping already prevents
+        # cross-session leakage.
+        return True
 
     @property
     def timeout_seconds(self) -> int | None:
@@ -44,10 +60,11 @@ class CheckBackgroundToolTool(BaseTool):
         return (
             "Inspect a backgrounded tool call by its background_id. "
             "Use when a prior tool call returned type='background'. "
-            "Options: wait for completion up to wait_seconds "
-            f"(default 60, max {_MAX_BACKGROUND_WAIT_SECONDS}), just "
-            "check status with wait_seconds=0, or cancel=true to "
-            "abort the task and discard its result."
+            "Options: list=true to enumerate all active background tasks, "
+            "wait for completion up to wait_seconds (default 60, max "
+            f"{_MAX_BACKGROUND_WAIT_SECONDS}), just check status with "
+            "wait_seconds=0, or cancel=true to abort the task and "
+            "discard its result."
         )
 
     @property
@@ -55,9 +72,21 @@ class CheckBackgroundToolTool(BaseTool):
         return {
             "type": "object",
             "properties": {
+                "list": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, return every active background task in "
+                        "this session (no other params needed). Use to "
+                        "recover background_ids after a context compaction."
+                    ),
+                    "default": False,
+                },
                 "background_id": {
                     "type": "string",
-                    "description": "The background_id returned by the timed-out tool.",
+                    "description": (
+                        "The background_id returned by the timed-out tool. "
+                        "Required unless list=true."
+                    ),
                 },
                 "wait_seconds": {
                     "type": "integer",
@@ -78,7 +107,6 @@ class CheckBackgroundToolTool(BaseTool):
                     "default": False,
                 },
             },
-            "required": ["background_id"],
         }
 
     async def _execute(
@@ -86,14 +114,21 @@ class CheckBackgroundToolTool(BaseTool):
         user_id: str | None,
         session: ChatSession,
         *,
+        list: bool = False,
         background_id: str = "",
         wait_seconds: int = 60,
         cancel: bool = False,
         **kwargs,
     ) -> ToolResponseBase:
+        if list:
+            return _list_response(session)
+
         if not background_id:
             return ErrorResponse(
-                message="background_id is required",
+                message=(
+                    "background_id is required (or pass list=true to "
+                    "enumerate active tasks)."
+                ),
                 session_id=session.session_id,
             )
 
@@ -118,6 +153,18 @@ class CheckBackgroundToolTool(BaseTool):
             if task.done():
                 return _status_from_finished_task(
                     session, tool_name, background_id, task
+                )
+            # Dry-run: simulate cancellation without touching the task, so
+            # the LLM can reason about the flow without real side effects.
+            if session.dry_run:
+                return BackgroundToolStatus(
+                    message=(
+                        f"[dry-run] Would cancel background task for " f"'{tool_name}'."
+                    ),
+                    session_id=session.session_id,
+                    status="cancelled",
+                    tool=tool_name,
+                    background_id=background_id,
                 )
             task.cancel()
             unregister_background_task(background_id)
@@ -166,6 +213,31 @@ class CheckBackgroundToolTool(BaseTool):
             background_id=background_id,
             waited_seconds=effective_wait,
         )
+
+
+def _list_response(session: ChatSession) -> BackgroundToolList:
+    """Build the response for ``check_background_tool(list=true)``."""
+    now = time.monotonic()
+    entries = [
+        BackgroundToolListEntry(
+            background_id=e["background_id"],
+            tool=e["tool_name"],
+            age_seconds=round(now - e["started_at"], 2),
+            done=e["done"],
+        )
+        for e in list_background_tasks()
+    ]
+    count = len(entries)
+    msg = (
+        f"{count} active background task(s)."
+        if count
+        else "No active background tasks."
+    )
+    return BackgroundToolList(
+        message=msg,
+        session_id=session.session_id,
+        tasks=entries,
+    )
 
 
 def _status_from_finished_task(

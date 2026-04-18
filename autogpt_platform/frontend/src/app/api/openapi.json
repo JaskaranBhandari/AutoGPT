@@ -1355,7 +1355,8 @@
                     {
                       "$ref": "#/components/schemas/MemoryForgetConfirmResponse"
                     },
-                    { "$ref": "#/components/schemas/BackgroundToolStatus" }
+                    { "$ref": "#/components/schemas/BackgroundToolStatus" },
+                    { "$ref": "#/components/schemas/BackgroundToolList" }
                   ],
                   "title": "Response Getv2[Dummy] Tool Response Type Export For Codegen"
                 }
@@ -8430,6 +8431,53 @@
         "type": "object",
         "required": ["sso_url", "expires_at"],
         "title": "AyrshareSSOResponse"
+      },
+      "BackgroundToolList": {
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/ResponseType",
+            "default": "mcp_tool_output"
+          },
+          "message": { "type": "string", "title": "Message" },
+          "session_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Session Id"
+          },
+          "tasks": {
+            "items": { "$ref": "#/components/schemas/BackgroundToolListEntry" },
+            "type": "array",
+            "title": "Tasks",
+            "description": "All background tasks currently registered for this session."
+          }
+        },
+        "type": "object",
+        "required": ["message"],
+        "title": "BackgroundToolList",
+        "description": "List of active background tasks, returned by ``check_background_tool(list=true)``."
+      },
+      "BackgroundToolListEntry": {
+        "properties": {
+          "background_id": { "type": "string", "title": "Background Id" },
+          "tool": {
+            "type": "string",
+            "title": "Tool",
+            "description": "Name of the originally-backgrounded tool."
+          },
+          "age_seconds": {
+            "type": "number",
+            "title": "Age Seconds",
+            "description": "Seconds since the task was parked in the background."
+          },
+          "done": {
+            "type": "boolean",
+            "title": "Done",
+            "description": "True if the task has finished but hasn't been consumed yet."
+          }
+        },
+        "type": "object",
+        "required": ["background_id", "tool", "age_seconds", "done"],
+        "title": "BackgroundToolListEntry",
+        "description": "One row in a ``check_background_tool(list=true)`` response."
       },
       "BackgroundToolStatus": {
         "properties": {

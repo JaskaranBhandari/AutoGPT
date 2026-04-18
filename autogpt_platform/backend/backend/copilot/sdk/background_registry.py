@@ -93,6 +93,27 @@ def get_background_task(background_id: str) -> dict[str, Any] | None:
     return registry.get(background_id)
 
 
+def list_background_tasks() -> list[dict[str, Any]]:
+    """Return a snapshot of every registered task in the current session.
+
+    Each entry: ``{background_id, tool_name, started_at, done}``. Used by
+    ``check_background_tool(list=true)`` so the agent can recover IDs after
+    context compaction or a long pause.
+    """
+    registry = _background_tasks.get(None)
+    if not registry:
+        return []
+    return [
+        {
+            "background_id": bg_id,
+            "tool_name": entry["tool_name"],
+            "started_at": entry["started_at"],
+            "done": entry["task"].done(),
+        }
+        for bg_id, entry in registry.items()
+    ]
+
+
 def unregister_background_task(background_id: str) -> None:
     """Drop a finished/cancelled task from the registry."""
     registry = _background_tasks.get(None)

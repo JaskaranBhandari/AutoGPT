@@ -10,6 +10,7 @@ from .background_registry import (
     cancel_all_background_tasks,
     get_background_task,
     init_registry,
+    list_background_tasks,
     register_background_task,
     unregister_background_task,
 )
@@ -123,3 +124,32 @@ async def test_registry_cap_evicts_oldest_on_overflow():
         t.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await t
+
+
+@pytest.mark.asyncio
+async def test_list_background_tasks_returns_snapshot():
+    async def hang():
+        await asyncio.sleep(60)
+
+    tasks = [asyncio.create_task(hang()) for _ in range(2)]
+    await asyncio.sleep(0)
+    bg_ids = [register_background_task(t, f"tool_{i}") for i, t in enumerate(tasks)]
+
+    snapshot = list_background_tasks()
+    assert len(snapshot) == 2
+    returned = {e["background_id"]: e for e in snapshot}
+    assert set(returned) == set(bg_ids)
+    for entry in snapshot:
+        assert entry["tool_name"].startswith("tool_")
+        assert entry["done"] is False
+        assert entry["started_at"] > 0
+
+    for t in tasks:
+        t.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await t
+
+
+@pytest.mark.asyncio
+async def test_list_background_tasks_empty():
+    assert list_background_tasks() == []

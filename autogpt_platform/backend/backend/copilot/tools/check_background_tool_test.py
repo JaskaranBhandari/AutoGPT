@@ -13,7 +13,7 @@ from backend.copilot.sdk.background_registry import (
 )
 
 from .check_background_tool import CheckBackgroundToolTool
-from .models import BackgroundToolStatus
+from .models import BackgroundToolList, BackgroundToolStatus
 
 
 def _make_session() -> MagicMock:
@@ -237,3 +237,82 @@ class TestCheckBackgroundTool:
         assert isinstance(response, BackgroundToolStatus)
         assert response.status == "error"
         assert response.output == "partial"
+
+    @pytest.mark.asyncio
+    async def test_list_true_returns_active_background_tasks(self):
+        """list=true enumerates registered tasks so the agent can recover
+        forgotten background_ids."""
+
+        async def hang():
+            await asyncio.sleep(60)
+
+        tasks = [asyncio.create_task(hang()) for _ in range(2)]
+        await asyncio.sleep(0)
+        bg_ids = [register_background_task(t, f"tool_{i}") for i, t in enumerate(tasks)]
+
+        tool = CheckBackgroundToolTool()
+        response = await tool._execute(
+            user_id="u",
+            session=_make_session(),
+            list=True,
+        )
+        assert isinstance(response, BackgroundToolList)
+        assert len(response.tasks) == 2
+        returned_ids = {entry.background_id for entry in response.tasks}
+        assert returned_ids == set(bg_ids)
+        for entry in response.tasks:
+            assert entry.tool.startswith("tool_")
+            assert entry.age_seconds >= 0
+            assert entry.done is False
+
+        for t in tasks:
+            t.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await t
+
+    @pytest.mark.asyncio
+    async def test_list_true_empty_when_no_tasks(self):
+        tool = CheckBackgroundToolTool()
+        response = await tool._execute(
+            user_id="u",
+            session=_make_session(),
+            list=True,
+        )
+        assert isinstance(response, BackgroundToolList)
+        assert response.tasks == []
+
+    @pytest.mark.asyncio
+    async def test_cancel_in_dry_run_does_not_actually_cancel_task(self):
+        """Under session.dry_run, cancel=true must not kill the real task."""
+
+        async def hang():
+            await asyncio.sleep(60)
+
+        task = asyncio.create_task(hang())
+        await asyncio.sleep(0)
+        bg_id = register_background_task(task, "slow_tool")
+
+        session = _make_session()
+        session.dry_run = True
+
+        tool = CheckBackgroundToolTool()
+        response = await tool._execute(
+            user_id="u",
+            session=session,
+            background_id=bg_id,
+            cancel=True,
+        )
+        assert isinstance(response, BackgroundToolStatus)
+        assert response.status == "cancelled"
+        assert "[dry-run]" in response.message
+        # Real task is still running.
+        assert not task.done()
+
+        # Cleanup.
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    def test_requires_auth_is_true(self):
+        tool = CheckBackgroundToolTool()
+        assert tool.requires_auth is True

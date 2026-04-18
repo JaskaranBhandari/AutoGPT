@@ -275,6 +275,29 @@ class BackgroundToolStatus(ToolResponseBase):
     waited_seconds: int | None = Field(default=None)
 
 
+class BackgroundToolListEntry(BaseModel):
+    """One row in a ``check_background_tool(list=true)`` response."""
+
+    background_id: str
+    tool: str = Field(description="Name of the originally-backgrounded tool.")
+    age_seconds: float = Field(
+        description="Seconds since the task was parked in the background."
+    )
+    done: bool = Field(
+        description="True if the task has finished but hasn't been consumed yet."
+    )
+
+
+class BackgroundToolList(ToolResponseBase):
+    """List of active background tasks, returned by ``check_background_tool(list=true)``."""
+
+    type: ResponseType = ResponseType.MCP_TOOL_OUTPUT
+    tasks: list[BackgroundToolListEntry] = Field(
+        default_factory=list,
+        description="All background tasks currently registered for this session.",
+    )
+
+
 class InputValidationErrorResponse(ToolResponseBase):
     """Response when run_agent receives unknown input fields."""
 
