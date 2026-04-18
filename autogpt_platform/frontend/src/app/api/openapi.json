@@ -1354,7 +1354,8 @@
                     },
                     {
                       "$ref": "#/components/schemas/MemoryForgetConfirmResponse"
-                    }
+                    },
+                    { "$ref": "#/components/schemas/BackgroundToolStatus" }
                   ],
                   "title": "Response Getv2[Dummy] Tool Response Type Export For Codegen"
                 }
@@ -8429,6 +8430,44 @@
         "type": "object",
         "required": ["sso_url", "expires_at"],
         "title": "AyrshareSSOResponse"
+      },
+      "BackgroundToolStatus": {
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/ResponseType",
+            "default": "mcp_tool_output"
+          },
+          "message": { "type": "string", "title": "Message" },
+          "session_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Session Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["completed", "still_running", "cancelled", "error"],
+            "title": "Status",
+            "description": "Current state of the background task."
+          },
+          "tool": {
+            "type": "string",
+            "title": "Tool",
+            "description": "The name of the originally-backgrounded tool."
+          },
+          "background_id": { "type": "string", "title": "Background Id" },
+          "output": {
+            "anyOf": [{}, { "type": "null" }],
+            "title": "Output",
+            "description": "Tool output when status=completed or status=error."
+          },
+          "waited_seconds": {
+            "anyOf": [{ "type": "integer" }, { "type": "null" }],
+            "title": "Waited Seconds"
+          }
+        },
+        "type": "object",
+        "required": ["message", "status", "tool", "background_id"],
+        "title": "BackgroundToolStatus",
+        "description": "Status of a backgrounded tool call, returned by ``check_background_tool``."
       },
       "BaseGraph-Input": {
         "properties": {
