@@ -34,6 +34,14 @@ const WAKE_RESYNC_THRESHOLD_MS = 30_000;
 const RECONNECT_MAX_DURATION_MS = 30_000;
 
 /**
+ * Delay after a clean stream close before refetching the session to check
+ * whether the backend executor is still running. Without this, the refetch
+ * races with the backend clearing `active_stream` and often reads a stale
+ * `active_stream=true`, triggering unnecessary reconnect cycles.
+ */
+const FINISH_REFETCH_SETTLE_MS = 500;
+
+/**
  * Time to wait after resumeStream() before concluding that the replay
  * produced no chunks. When exceeded with status still "submitted", we
  * restore the stripped assistant snapshot so the user sees the hydrated
@@ -287,10 +295,7 @@ export function useCopilotStream({
       }
 
       // Check if backend executor is still running after clean close.
-      // Brief delay to let the backend clear active_stream — without this,
-      // the refetch often races and sees stale active_stream=true, triggering
-      // unnecessary reconnect cycles.
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, FINISH_REFETCH_SETTLE_MS));
       const result = await refetchSession();
       if (hasActiveBackendStream(result)) {
         handleReconnect(sessionId);

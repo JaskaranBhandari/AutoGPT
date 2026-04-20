@@ -27,6 +27,9 @@ export function RateLimitGate({ rateLimitMessage, onDismiss }: Props) {
   } = useGetV2GetCopilotUsage({
     query: {
       select: (res) => res.data as CoPilotUsageStatus,
+      // Only fetch once a rate limit has been hit — avoids a 30s background
+      // poll for the 99% of sessions that never hit their quota.
+      enabled: !!rateLimitMessage,
       refetchInterval: 30_000,
       staleTime: 10_000,
     },

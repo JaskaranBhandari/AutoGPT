@@ -23,11 +23,15 @@ export function useSessionDeletion() {
   const { mutate: deleteSession, isPending: isDeleting } =
     useDeleteV2DeleteSession({
       mutation: {
-        onSuccess: () => {
+        onSuccess: (_data, variables) => {
           queryClient.invalidateQueries({
             queryKey: getGetV2ListSessionsQueryKey(),
           });
-          if (sessionToDelete?.id === sessionId) {
+          // Use the mutation's own `variables` — not the closed-over store
+          // value — so a rapid open/cancel/open-different sequence can't
+          // accidentally clear the wrong active session after the network
+          // round-trip.
+          if (variables.sessionId === sessionId) {
             setSessionId(null);
           }
           setSessionToDelete(null);
