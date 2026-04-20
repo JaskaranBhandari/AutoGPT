@@ -435,9 +435,13 @@ describe("useCopilotStream — resume snapshot guard", () => {
 
     // Resume fires and strips the trailing assistant (the SDK will build
     // fresh when the backend replays from "0-0"). The SDK mock only records
-    // calls — it doesn't execute the updater — so the snapshot must come
-    // from the status transition, not from setMessages return values.
+    // calls — it doesn't execute the updater — so stripAndResume's own
+    // snapshot capture produces null. Prime the store with the snapshot it
+    // would have saved in real use.
     expect(mockResumeStream).toHaveBeenCalledTimes(1);
+    useCopilotStreamStore
+      .getState()
+      .updateCoord("sess-1", { stripSnapshot: trailingAssistant });
 
     // Simulate the resume kicking the SDK into "submitted" with no chunks,
     // then dropping back to "ready" (e.g. 204 Not Found because the stream
