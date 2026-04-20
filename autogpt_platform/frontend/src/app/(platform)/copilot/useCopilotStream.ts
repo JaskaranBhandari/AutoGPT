@@ -42,6 +42,54 @@ const RECONNECT_MAX_DURATION_MS = 30_000;
 const FINISH_REFETCH_SETTLE_MS = 500;
 
 /**
+ * Parses a backend-encoded error code from an `errorText` payload.
+ *
+ * The AI-SDK SSE protocol enforces `z.strictObject({type, errorText})`
+ * on StreamError frames, so the backend cannot attach a top-level `code`
+ * field. Instead it prefixes the message with `[code:<id>] <msg>` and
+ * this helper extracts it client-side.
+ */
+function parseBackendErrorCode(raw: string): {
+  code: string | null;
+  message: string;
+} {
+  const match = raw.match(/^\s*\[code:([a-z0-9_]+)\]\s*(.*)$/is);
+  if (!match) return { code: null, message: raw };
+  return { code: match[1], message: match[2].trim() };
+}
+
+/**
+ * User-facing toast copy for each backend error code we surface.
+ * `description` defaults to the backend's error message when provided;
+ * `fallbackDescription` is used when the backend sends only the code.
+ */
+const TOAST_BY_BACKEND_CODE: Record<
+  string,
+  { title: string; fallbackDescription: string }
+> = {
+  idle_timeout: {
+    title: "AutoPilot stopped responding",
+    fallbackDescription:
+      "A tool call got stuck and the session timed out. Press Try Again to resume.",
+  },
+  tool_stalled: {
+    title: "A tool call is taking too long",
+    fallbackDescription:
+      "The assistant is waiting on a tool that hasn't responded. Press Try Again to restart.",
+  },
+  transient_api_error: {
+    title: "Connection hiccup",
+    fallbackDescription:
+      "We hit a temporary error talking to the model. Press Try Again to continue.",
+  },
+  circuit_breaker_empty_tool_calls: {
+    title: "AutoPilot paused",
+    fallbackDescription:
+      "The assistant made too many empty tool calls in a row and was paused. Press Try Again to continue.",
+  },
+};
+
+/**
  * Time to wait after resumeStream() before concluding that the replay
  * produced no chunks. When exceeded with status still "submitted", we
  * restore the stripped assistant snapshot so the user sees the hydrated
@@ -136,7 +184,14 @@ export function useCopilotStream({
   const [isSyncing, setIsSyncing] = useState(false);
   // Synchronous flag read inside SDK callbacks — kept as a ref so callbacks
   // don't have to trigger re-renders to observe changes.
-  const isUserStoppingRef = useRef(false);
+  //
+  // Scoped to a sessionId so we can distinguish "user stopped session X"
+  // from "the resume effect for session Y is running". On a rapid A→B→A
+  // switch, setting a simple boolean during the A→B cleanup would block
+  // the incoming session's resume effect (which runs in the same commit)
+  // from firing resumeStream — even though it's a different session.
+  // `null` means "no stop in progress".
+  const isUserStoppingRef = useRef<string | null>(null);
 
   function handleReconnect(sid: string) {
     if (!sid) return;
@@ -284,8 +339,10 @@ export function useCopilotStream({
     transport: transport ?? undefined,
     onFinish: async ({ isDisconnect, isAbort }) => {
       if (isAbort || !sessionId) return;
-      // User-initiated stops should not trigger reconnection.
-      if (isUserStoppingRef.current) return;
+      // User-initiated stops (either explicit Stop press or the stop()
+      // fired during a session switch on the OLD session) should not
+      // trigger reconnection. Conservative check: any pending stop bails.
+      if (isUserStoppingRef.current !== null) return;
 
       // The AI SDK rarely sets isDisconnect — treat ANY non-user-initiated
       // finish as a potential disconnect when the backend stream is active.
@@ -345,11 +402,29 @@ export function useCopilotStream({
         return;
       }
 
+      // Backend error codes are encoded as `[code:<id>] <message>` because
+      // the AI-SDK SSE schema (`z.strictObject({type, errorText})`) rejects
+      // a top-level `code` field. Parse the prefix so we can surface a
+      // focused toast for the specific failure mode.
+      const { code: backendCode, message: backendMessage } =
+        parseBackendErrorCode(errorDetail);
+      const userToast = backendCode
+        ? TOAST_BY_BACKEND_CODE[backendCode]
+        : undefined;
+      if (userToast) {
+        toast({
+          title: userToast.title,
+          description: backendMessage || userToast.fallbackDescription,
+          variant: "destructive",
+        });
+        return;
+      }
+
       // Reconnect on network errors or transient API errors so the
       // persisted retryable-error marker is loaded and the "Try Again"
       // button appears.  Without this, transient errors only show in the
       // onError callback (where StreamError strips the retryable prefix).
-      if (isUserStoppingRef.current) return;
+      if (isUserStoppingRef.current !== null) return;
       const isNetworkError =
         error.name === "TypeError" || error.name === "AbortError";
       const isTransientApiError = errorDetail.includes(
@@ -415,7 +490,7 @@ export function useCopilotStream({
   // sdkStop() aborts the SSE fetch instantly (UI feedback), then we fire
   // the cancel API to actually stop the executor and wait for confirmation.
   async function stop() {
-    isUserStoppingRef.current = true;
+    isUserStoppingRef.current = sessionId ?? "__anon__";
     sdkStop();
     // Resolve pending tool calls and inject a cancellation marker so the UI
     // shows "You manually stopped this chat" immediately (the backend writes
@@ -570,9 +645,11 @@ export function useCopilotStream({
 
     const isSwitching = Boolean(prevSid && prevSid !== sessionId);
     if (isSwitching) {
-      // Mark BEFORE stopping so the old stream's async onError (which fires
-      // after the abort) sees the flag and short-circuits the reconnect path.
-      isUserStoppingRef.current = true;
+      // Scope the stopping marker to the OLD session so the incoming
+      // session's resume effect — which runs in the same commit — doesn't
+      // mistake this cleanup for "user just pressed Stop on the new
+      // session I'm about to resume" and bail.
+      isUserStoppingRef.current = prevSid!;
       sdkStopRef.current();
       disconnectSessionStream(prevSid!);
       // Drop the previous session's coord so a future visit starts fresh
@@ -582,12 +659,15 @@ export function useCopilotStream({
       // aborted fetch's onError has fired — but verify the epoch hasn't
       // changed again (rapid session switches).
       setTimeout(() => {
-        if (sessionEpochRef.current === currentEpoch) {
-          isUserStoppingRef.current = false;
+        if (
+          sessionEpochRef.current === currentEpoch &&
+          isUserStoppingRef.current === prevSid
+        ) {
+          isUserStoppingRef.current = null;
         }
       }, 0);
     } else {
-      isUserStoppingRef.current = false;
+      isUserStoppingRef.current = null;
     }
 
     clearTimeout(reconnectTimerRef.current);
@@ -709,8 +789,10 @@ export function useCopilotStream({
     // Only resume once per session
     if (coord.hasResumed) return;
 
-    // Don't resume a stream the user just cancelled
-    if (isUserStoppingRef.current) return;
+    // Don't resume a stream the user just cancelled. Session-scoped: a
+    // pending stop on a DIFFERENT session (e.g. the previous one we're
+    // switching away from) must NOT block this session's resume.
+    if (isUserStoppingRef.current === sessionId) return;
 
     const capturedEpoch = sessionEpochRef.current;
     function doResume() {
@@ -718,7 +800,7 @@ export function useCopilotStream({
       if (!sessionId) return;
       const latest = useCopilotStreamStore.getState().getCoord(sessionId);
       if (latest.hasResumed) return;
-      if (isUserStoppingRef.current) return;
+      if (isUserStoppingRef.current === sessionId) return;
 
       useCopilotStreamStore
         .getState()
@@ -746,8 +828,8 @@ export function useCopilotStream({
   // Reset the user-stop flag once the backend confirms the stream is no
   // longer active — this prevents the flag from staying stale forever.
   useEffect(() => {
-    if (!hasActiveStream && isUserStoppingRef.current) {
-      isUserStoppingRef.current = false;
+    if (!hasActiveStream && isUserStoppingRef.current !== null) {
+      isUserStoppingRef.current = null;
     }
   }, [hasActiveStream]);
 
@@ -767,7 +849,8 @@ export function useCopilotStream({
     sendMessage,
     stop,
     status,
-    error: isReconnecting || isUserStoppingRef.current ? undefined : error,
+    error:
+      isReconnecting || isUserStoppingRef.current !== null ? undefined : error,
     isReconnecting,
     isSyncing,
     isUserStoppingRef,

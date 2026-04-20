@@ -477,6 +477,25 @@ async def _reduce_context(
     return ReducedContext(TranscriptBuilder(), False, None, True, True, retry_target)
 
 
+def _humanise_tool_list(names: list[str]) -> str:
+    """Format a list of tool names for user-facing messages.
+
+    ``["WebSearch"]``              → ``"'WebSearch'"``
+    ``["WebSearch", "run_block"]`` → ``"'WebSearch' and 'run_block'"``
+    Three or more items collapse to ``"'A', 'B', and 1 other"`` so the
+    toast stays readable.
+    """
+    if not names:
+        return ""
+    quoted = [f"'{n}'" for n in names]
+    if len(quoted) == 1:
+        return quoted[0]
+    if len(quoted) == 2:
+        return f"{quoted[0]} and {quoted[1]}"
+    extras = len(quoted) - 2
+    return f"{quoted[0]}, {quoted[1]}, and {extras} other"
+
+
 def _append_error_marker(
     session: ChatSession | None,
     display_msg: str,
@@ -1925,7 +1944,10 @@ def _check_empty_tool_breaker(
     return _EmptyToolBreakResult(
         count=consecutive,
         tripped=True,
-        error=StreamError(errorText=error_msg, code=error_code),
+        error=StreamError(
+            errorText=f"[code:{error_code}] {error_msg}",
+            code=error_code,
+        ),
         error_msg=error_msg,
         error_code=error_code,
     )
@@ -2046,16 +2068,38 @@ async def _run_stream_attempt(
                 # — a 10-min gap here means the SDK itself is stuck.
                 idle_seconds = time.monotonic() - _last_real_msg_time
                 if idle_seconds >= _IDLE_TIMEOUT_SECONDS:
+                    unresolved_tool_names = sorted(
+                        {
+                            info.get("name", "unknown")
+                            for tid, info in state.adapter.current_tool_calls.items()
+                            if tid not in state.adapter.resolved_tool_calls
+                        }
+                    )
                     logger.error(
-                        "%s Idle timeout after %.0fs — aborting stream",
+                        "%s Idle timeout after %.0fs — aborting stream "
+                        "(unresolved tools: %s)",
                         ctx.log_prefix,
                         idle_seconds,
+                        ", ".join(unresolved_tool_names) or "none",
                     )
-                    stream_error_msg = (
-                        "The session has been idle for too long. Please try again."
-                    )
+                    # errorText is prefixed with `[code:<id>]` so the
+                    # frontend can parse a machine-readable code out of
+                    # the AI-SDK's strict `{type, errorText}` protocol
+                    # (which forbids extra top-level fields). The
+                    # retryable marker written to the session is stripped
+                    # of the code prefix to keep the chat bubble readable.
                     stream_error_code = "idle_timeout"
-                    _append_error_marker(ctx.session, stream_error_msg, retryable=True)
+                    tool_phrase = (
+                        f" while running {_humanise_tool_list(unresolved_tool_names)}"
+                        if unresolved_tool_names
+                        else ""
+                    )
+                    display_msg = (
+                        f"AutoPilot stopped responding{tool_phrase}. "
+                        "This usually means a tool got stuck. Please try again."
+                    )
+                    _append_error_marker(ctx.session, display_msg, retryable=True)
+                    stream_error_msg = f"[code:{stream_error_code}] {display_msg}"
                     yield StreamError(
                         errorText=stream_error_msg,
                         code=stream_error_code,
@@ -3669,7 +3713,10 @@ async def stream_chat_completion_sdk(
             else:
                 error_text = _friendly_error_text(safe_err)
                 error_code = "sdk_stream_error"
-            yield StreamError(errorText=error_text, code=error_code)
+            yield StreamError(
+                errorText=f"[code:{error_code}] {error_text}",
+                code=error_code,
+            )
 
         # Copy token usage from retry state to outer-scope accumulators
         # so the finally block can persist them.
@@ -3767,7 +3814,10 @@ async def stream_chat_completion_sdk(
             e, asyncio.CancelledError
         ) or _is_sdk_disconnect_error(e)
         if not is_cancellation:
-            yield StreamError(errorText=display_msg, code=code)
+            yield StreamError(
+                errorText=f"[code:{code}] {display_msg}",
+                code=code,
+            )
 
         raise
     finally:

@@ -19,7 +19,7 @@ interface Args {
   sessionId: string | null;
   sendMessage: SendMessageFn;
   createSession: () => Promise<string | undefined>;
-  isUserStoppingRef: React.MutableRefObject<boolean>;
+  isUserStoppingRef: React.MutableRefObject<string | null>;
 }
 
 /**
@@ -165,7 +165,7 @@ export function useSendMessage({
       }
     }
 
-    isUserStoppingRef.current = false;
+    isUserStoppingRef.current = null;
 
     if (sessionId) {
       const prebuiltParts = pendingFilePartsRef.current;

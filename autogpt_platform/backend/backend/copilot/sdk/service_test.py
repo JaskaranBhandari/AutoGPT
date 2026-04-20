@@ -13,6 +13,7 @@ from backend.copilot import config as cfg_mod
 from .service import (
     _IDLE_TIMEOUT_SECONDS,
     _build_system_prompt_value,
+    _humanise_tool_list,
     _is_sdk_disconnect_error,
     _normalize_model_name,
     _prepare_file_attachments,
@@ -730,3 +731,25 @@ class TestIdleTimeoutConstant:
 
     def test_idle_timeout_is_10_min(self):
         assert _IDLE_TIMEOUT_SECONDS == 10 * 60
+
+
+class TestHumaniseToolList:
+    """Tool-name formatter used to build the idle-timeout error message."""
+
+    def test_empty_returns_empty_string(self):
+        assert _humanise_tool_list([]) == ""
+
+    def test_single_tool_is_quoted(self):
+        assert _humanise_tool_list(["WebSearch"]) == "'WebSearch'"
+
+    def test_two_tools_are_joined_with_and(self):
+        assert (
+            _humanise_tool_list(["WebSearch", "run_block"])
+            == "'WebSearch' and 'run_block'"
+        )
+
+    def test_three_plus_collapse_extras(self):
+        assert (
+            _humanise_tool_list(["a", "b", "c", "d"])
+            == "'a', 'b', and 2 other"
+        )
