@@ -36,13 +36,9 @@ class WebSearchTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Search the web and return cited results.  Use this for live "
-            "information — news, current events, up-to-date docs, recent "
-            "releases — when the model's training data would be stale.  "
-            "Returns a list of {title, url, snippet} plus the URLs so "
-            "``web_fetch`` can deep-dive any result.  Costs a few cents "
-            "per search; prefer one well-targeted query over many "
-            "reformulations."
+            "Search the web for live info (news, recent docs). Returns "
+            "{title, url, snippet}; use web_fetch to deep-dive a URL. "
+            "Prefer one targeted query over many reformulations."
         )
 
     @property
@@ -52,13 +48,13 @@ class WebSearchTool(BaseTool):
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search query — a question or topic.",
+                    "description": "Search query.",
                 },
                 "max_results": {
                     "type": "integer",
                     "description": (
-                        f"Maximum results to return (default "
-                        f"{_DEFAULT_MAX_RESULTS}, hard cap {_HARD_MAX_RESULTS})."
+                        f"Max results (default {_DEFAULT_MAX_RESULTS}, "
+                        f"cap {_HARD_MAX_RESULTS})."
                     ),
                     "default": _DEFAULT_MAX_RESULTS,
                 },
