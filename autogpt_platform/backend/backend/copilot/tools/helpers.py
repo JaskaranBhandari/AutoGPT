@@ -791,14 +791,14 @@ def require_guide_read(session: ChatSession, tool_name: str):
     """Return an ErrorResponse if the guide hasn't been loaded this session.
 
     Import inline to keep ``helpers.py`` free of tool-response imports.
-    Uses :meth:`ChatSession.has_tool_been_called_this_turn` which checks
-    both the persisted ``messages`` list and the in-flight announcement
-    buffer — so a guide call dispatched earlier in the *current* turn
-    (before ``session.messages`` flushes at turn end) is recognised too.
-    Otherwise a second tool in the same turn would re-fire this guard
-    despite the guide having been called — seen on Kimi K2.6 in
-    particular because its aggressive tool-call chaining exercises this
-    path far more than Sonnet does.
+    Uses :meth:`ChatSession.has_tool_been_called` which checks both the
+    persisted ``messages`` list (session-wide) and the in-flight
+    announcement buffer — so a guide call dispatched earlier in the
+    *current* turn (before ``session.messages`` flushes at turn end) is
+    recognised too.  Otherwise a second tool in the same turn would
+    re-fire this guard despite the guide having been called — seen on
+    Kimi K2.6 in particular because its aggressive tool-call chaining
+    exercises this path far more than Sonnet does.
     """
     from .models import ErrorResponse  # noqa: PLC0415 — avoid circular import
 
@@ -808,7 +808,7 @@ def require_guide_read(session: ChatSession, tool_name: str):
     # requiring one would waste a round-trip every turn.
     if session.metadata.builder_graph_id:
         return None
-    if session.has_tool_been_called_this_turn(_AGENT_GUIDE_TOOL_NAME):
+    if session.has_tool_been_called(_AGENT_GUIDE_TOOL_NAME):
         return None
     return ErrorResponse(
         message=(

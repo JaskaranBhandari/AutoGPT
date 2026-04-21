@@ -254,6 +254,13 @@ class ChatSession(ChatSessionInfo):
     def announce_inflight_tool_call(self, tool_name: str) -> None:
         """Record that *tool_name* is being dispatched in the current turn.
 
+        Called by the baseline tool executor **before** the tool actually
+        runs (the announcement is about dispatch, not success).  If the
+        tool raises, the name stays in the buffer for the rest of the
+        turn — that matches the guide-read gate's contract ("was the tool
+        called?") but means any future gate wanting *successful*
+        dispatches would need its own tracking.
+
         Lets in-turn guards (see
         ``copilot/tools/helpers.py::require_guide_read``) see a tool
         call the moment it's issued, instead of waiting for the
@@ -270,13 +277,18 @@ class ChatSession(ChatSessionInfo):
         """Reset the in-flight tool-call announcement buffer."""
         self._inflight_tool_calls.clear()
 
-    def has_tool_been_called_this_turn(self, tool_name: str) -> bool:
-        """True when *tool_name* has been called in the current turn.
+    def has_tool_been_called(self, tool_name: str) -> bool:
+        """True when *tool_name* has been called in this session.
 
-        Checks the in-flight announcement buffer first (for calls
-        dispatched in *this* turn but not yet persisted) and then the
-        durable ``messages`` history (for past turns + prior rounds
-        within this turn whose writes already landed).
+        Checks the in-flight announcement buffer (for calls dispatched
+        in the *current* turn but not yet flushed into ``messages``) and
+        the durable ``messages`` history (for past turns + prior rounds
+        within this turn whose writes already landed).  The durable
+        scan is session-wide, not turn-scoped: a matching tool call
+        anywhere in ``messages`` counts.  This matches the guide-read
+        contract — once the guide has been read in the session, the
+        agent doesn't need to re-read it for later create/edit/fix
+        tools.
         """
         if tool_name in self._inflight_tool_calls:
             return True

@@ -23,7 +23,7 @@ def _session_with_messages(
 
     Uses ``ChatSession.new`` + attribute reassignment rather than
     ``MagicMock(spec=...)`` because the gate now calls
-    ``session.has_tool_been_called_this_turn(...)`` and a ``spec`` mock
+    ``session.has_tool_been_called(...)`` and a ``spec`` mock
     returns a truthy ``MagicMock`` from that call, hiding real gate
     behaviour.  A live ``ChatSession`` also correctly initialises the
     ``_inflight_tool_calls`` PrivateAttr scratch buffer used by the
