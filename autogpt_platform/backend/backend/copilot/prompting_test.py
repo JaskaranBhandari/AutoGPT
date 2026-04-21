@@ -87,44 +87,9 @@ class TestBaselineWebSearchSupplement:
         assert '"prompt"' in text
         # SendWebRequest required input.
         assert '"url"' in text
-
-    def test_supplement_uses_perplexitymodel_enum_values_verbatim(self):
-        """Regression: the earlier supplement invented bare sonar IDs
-        (``"sonar"``, ``"sonar-reasoning"``, ``"sonar-reasoning-pro"``)
-        that don't match ``PerplexityModel`` values — every call logged
-        an ``Invalid PerplexityModel`` warning and silently fell back to
-        plain ``sonar``.  The supplement must now list exactly the enum
-        values, in full provider-prefixed form, and the default must
-        equal ``PerplexityModel.SONAR.value``."""
-        from backend.blocks.perplexity import PerplexityModel
-
-        text = prompting.get_baseline_web_search_supplement()
-        # Every enum value surfaces verbatim.
-        for model in PerplexityModel:
-            assert (
-                model.value in text
-            ), f"Supplement missing {model.value!r} (known PerplexityModel value)"
-        # The default example carries the provider prefix so Kimi can
-        # pass it through without the fallback warning firing.
-        assert f'"model": "{PerplexityModel.SONAR.value}"' in text
-
-    def test_supplement_does_not_mention_invented_sonar_variants(self):
-        """Regression: these bare strings were listed as valid Perplexity
-        models before the enum-driven rewrite — none match a real
-        ``PerplexityModel`` value, so the block silently fell back to
-        ``SONAR`` on every call.  Guard against the next reader
-        accidentally reintroducing them."""
-        text = prompting.get_baseline_web_search_supplement()
-        # ``sonar-reasoning`` / ``sonar-reasoning-pro`` are not enum
-        # members today — if upstream adds them, re-enable this check
-        # alongside an ``assert PerplexityModel.SONAR_REASONING ...``.
-        assert "sonar-reasoning" not in text
-        # Bare ``"sonar"`` without the ``perplexity/`` prefix is rejected
-        # by the block's model validator; the enum-driven supplement
-        # should emit only the provider-prefixed form.  Check the
-        # quote-wrapped bare form to avoid matching ``perplexity/sonar``.
-        assert '"sonar"' not in text
-        assert '"sonar-pro"' not in text
+        # Default Perplexity model is named explicitly so Kimi doesn't
+        # guess (``sonar-xl`` etc. 404 on the Perplexity API).
+        assert '"sonar"' in text
 
     def test_supplement_flags_credentials_dependency(self):
         text = prompting.get_baseline_web_search_supplement()

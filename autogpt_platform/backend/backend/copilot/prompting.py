@@ -436,25 +436,11 @@ def get_baseline_web_search_supplement() -> str:
     * SendWebRequest (fetch an arbitrary URL) —
       ``SEND_WEB_REQUEST_BLOCK_ID``.
 
-    The Perplexity model list is pulled from ``PerplexityModel`` at
-    render time — if a sonar SKU is added / dropped upstream the
-    supplement follows automatically and the registry test catches
-    block-ID drift.
-
     The supplement is static — no per-user / per-session content — so it
     stays on the cacheable prefix.  Append to the baseline system prompt
     only; SDK callers would just confuse their native ``WebSearch`` with
     a competing block recipe.
     """
-    from backend.blocks.perplexity import PerplexityModel  # noqa: PLC0415
-
-    default_model = PerplexityModel.SONAR.value
-    # Enumerate in declaration order so the default sonar SKU stays
-    # first.  ``.value`` gives the provider-prefixed form Kimi must pass
-    # verbatim (``perplexity/sonar``, not bare ``sonar``) — the block's
-    # input validator coerces unknown values back to SONAR, so the
-    # previous prompt silently degraded every call.
-    model_lines = "\n".join(f"  - ``{m.value}``" for m in PerplexityModel)
     return f"""
 
 ## Web Search & URL Fetch (fast mode)
@@ -464,13 +450,10 @@ copilot blocks via ``run_block`` when you need live web content.
 
 ### Web search with citations — Perplexity
 - Block ID: ``{PERPLEXITY_BLOCK_ID}``
-- Input: ``{{"prompt": "<query>", "model": "{default_model}"}}``.
-- ``model`` MUST be one of the provider-prefixed values below (pass the
-  full string verbatim — unknown values silently fall back to
-  ``{default_model}``):
-{model_lines}
-- Default to ``{default_model}`` unless the user asks for deeper
-  research, in which case pass ``perplexity/sonar-deep-research``.
+- Input: ``{{"prompt": "<query>", "model": "sonar"}}``
+  (``model`` defaults to ``sonar``; other options: ``sonar-pro``,
+  ``sonar-reasoning``, ``sonar-reasoning-pro``, ``sonar-deep-research``
+  — use ``sonar`` unless the user asks for deeper research.)
 - Output: ``response`` (string), ``annotations`` (list of URL citations).
 - Requires Perplexity credentials connected to the user's account.  If
   the block errors with a missing-credentials message, call
