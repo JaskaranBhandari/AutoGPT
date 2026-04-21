@@ -22,11 +22,12 @@ This module keeps the wire-level concerns in one place:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.copilot.model import ChatMessage
 from backend.copilot.response_model import (
@@ -36,6 +37,11 @@ from backend.copilot.response_model import (
     StreamReasoningStart,
 )
 
+logger = logging.getLogger(__name__)
+
+
+_VISIBLE_REASONING_TYPES = frozenset({"reasoning.text", "reasoning.summary"})
+
 
 class ReasoningDetail(BaseModel):
     """One entry in OpenRouter's ``reasoning_details`` list.
@@ -44,7 +50,10 @@ class ReasoningDetail(BaseModel):
     ``"reasoning.encrypted"`` entries.  Only the first two carry
     user-visible text; encrypted entries are opaque and omitted from the
     rendered collapse.  Unknown future types are tolerated (``extra="ignore"``)
-    so an upstream addition doesn't crash the stream.
+    so an upstream addition doesn't crash the stream — but their ``text`` /
+    ``summary`` fields are NOT surfaced because they may carry provider
+    metadata rather than user-visible reasoning (see
+    :attr:`visible_text`).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -55,7 +64,18 @@ class ReasoningDetail(BaseModel):
 
     @property
     def visible_text(self) -> str:
-        """Return the human-readable text for this entry, or ``""``."""
+        """Return the human-readable text for this entry, or ``""``.
+
+        Only entries with a recognised reasoning type (``reasoning.text`` /
+        ``reasoning.summary``) surface text; unknown or encrypted types
+        return an empty string even if they carry a ``text`` /
+        ``summary`` field, to guard against future provider metadata
+        being rendered as reasoning in the UI.  Entries missing a
+        ``type`` are treated as text (pre-``reasoning_details`` OpenRouter
+        payloads omit the field).
+        """
+        if self.type is not None and self.type not in _VISIBLE_REASONING_TYPES:
+            return ""
         return self.text or self.summary or ""
 
 
@@ -79,8 +99,22 @@ class OpenRouterDeltaExtension(BaseModel):
 
     @classmethod
     def from_delta(cls, delta: ChoiceDelta) -> "OpenRouterDeltaExtension":
-        """Build an extension view from ``delta.model_extra``."""
-        return cls.model_validate(delta.model_extra or {})
+        """Build an extension view from ``delta.model_extra``.
+
+        Malformed provider payloads (e.g. ``reasoning_details`` shipped as
+        a string rather than a list) surface as a ``ValidationError`` which
+        is logged and swallowed — returning an empty extension so the rest
+        of the stream (valid text / tool calls) keeps flowing.  An optional
+        feature's corrupted wire data must never abort the whole stream.
+        """
+        try:
+            return cls.model_validate(delta.model_extra or {})
+        except ValidationError as exc:
+            logger.warning(
+                "[Baseline] Dropping malformed OpenRouter reasoning payload: %s",
+                exc,
+            )
+            return cls()
 
     def visible_text(self) -> str:
         """Concatenated reasoning text, pulled from whichever channel is set.
@@ -98,23 +132,18 @@ class OpenRouterDeltaExtension(BaseModel):
         return "".join(d.visible_text for d in self.reasoning_details)
 
 
-def _is_anthropic_route(model: str) -> bool:
-    """Mirror of the private ``_is_anthropic_model`` check in service.py.
-
-    Kept as a free function here to avoid a circular import — ``service.py``
-    imports this module, not the other way around.
-    """
-    lowered = model.lower()
-    return "claude" in lowered or lowered.startswith("anthropic")
-
-
 def reasoning_extra_body(model: str, max_thinking_tokens: int) -> dict[str, Any] | None:
     """Build the ``extra_body["reasoning"]`` fragment for the OpenAI client.
 
-    Returns ``None`` for non-Anthropic routes — other OpenRouter providers
-    drop the field but we skip it anyway to keep the payload minimal.
+    Returns ``None`` for non-Anthropic routes (other OpenRouter providers
+    ignore the field but we skip it anyway to keep the payload minimal)
+    and for ``max_thinking_tokens <= 0`` (operator kill switch).
     """
-    if not _is_anthropic_route(model):
+    # Imported lazily to avoid pulling service.py at module load — service.py
+    # imports this module, and the lazy import keeps the dependency one-way.
+    from backend.copilot.baseline.service import _is_anthropic_model
+
+    if not _is_anthropic_model(model) or max_thinking_tokens <= 0:
         return None
     return {"reasoning": {"max_tokens": max_thinking_tokens}}
 

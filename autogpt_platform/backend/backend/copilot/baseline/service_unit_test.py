@@ -1774,3 +1774,69 @@ class TestBaselineReasoningStreaming:
 
         extra_body = mock_client.chat.completions.create.call_args[1]["extra_body"]
         assert "reasoning" not in extra_body
+
+    @pytest.mark.asyncio
+    async def test_reasoning_only_stream_still_closes_block(self):
+        """Regression: a stream with only reasoning (no text, no tool_call)
+        must still emit a matching ``reasoning-end`` at stream close so the
+        frontend Reasoning collapse finalises.  Exercised here against
+        ``_baseline_llm_caller`` to cover the emitter's integration with
+        the finally-block, not just the unit emitter in reasoning_test.py.
+        """
+        state = _BaselineStreamState(model="anthropic/claude-sonnet-4-6")
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            return_value=_make_stream_mock(
+                _make_delta_chunk(reasoning="just thinking"),
+            )
+        )
+
+        with patch(
+            "backend.copilot.baseline.service._get_openai_client",
+            return_value=mock_client,
+        ):
+            await _baseline_llm_caller(
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[],
+                state=state,
+            )
+
+        types = [type(e).__name__ for e in state.pending_events]
+        assert "StreamReasoningStart" in types
+        assert "StreamReasoningEnd" in types
+        # No text was produced — no text events should be emitted.
+        assert "StreamTextStart" not in types
+        assert "StreamTextDelta" not in types
+
+    @pytest.mark.asyncio
+    async def test_reasoning_param_suppressed_when_thinking_tokens_zero(self):
+        """Operator kill switch: setting ``claude_agent_max_thinking_tokens``
+        to 0 removes the ``reasoning`` fragment from ``extra_body`` even on
+        an Anthropic route.  Restores the zero-disables behaviour the old
+        ``baseline_reasoning_max_tokens`` config used to provide."""
+        state = _BaselineStreamState(model="anthropic/claude-sonnet-4-6")
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(
+            return_value=_make_stream_mock()
+        )
+
+        with (
+            patch(
+                "backend.copilot.baseline.service._get_openai_client",
+                return_value=mock_client,
+            ),
+            patch(
+                "backend.copilot.baseline.service.config.claude_agent_max_thinking_tokens",
+                0,
+            ),
+        ):
+            await _baseline_llm_caller(
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[],
+                state=state,
+            )
+
+        extra_body = mock_client.chat.completions.create.call_args[1]["extra_body"]
+        assert "reasoning" not in extra_body

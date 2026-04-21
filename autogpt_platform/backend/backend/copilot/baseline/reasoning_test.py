@@ -48,6 +48,19 @@ class TestReasoningDetail:
         )
         assert d.text == "x"
 
+    def test_visible_text_empty_for_unknown_type(self):
+        # Unknown types may carry provider metadata that must not render as
+        # user-visible reasoning — regardless of whether a text/summary is
+        # present.  Only ``reasoning.text`` / ``reasoning.summary`` surface.
+        d = ReasoningDetail(type="reasoning.future", text="leaked metadata")
+        assert d.visible_text == ""
+
+    def test_visible_text_surfaces_text_when_type_missing(self):
+        # Pre-``reasoning_details`` OpenRouter payloads omit ``type`` — treat
+        # them as text so we don't regress the legacy structured shape.
+        d = ReasoningDetail(text="plain")
+        assert d.visible_text == "plain"
+
 
 class TestOpenRouterDeltaExtension:
     def test_from_delta_reads_model_extra(self):
@@ -91,6 +104,35 @@ class TestOpenRouterDeltaExtension:
         assert ext.reasoning_content is None
         assert ext.reasoning_details == []
 
+    def test_malformed_reasoning_payload_logged_and_swallowed(self, caplog):
+        # A malformed payload (e.g. reasoning_details shipped as a string
+        # rather than a list) must not abort the stream — log it and
+        # return an empty extension so valid text/tool events keep flowing.
+        from openai.types.chat.chat_completion_chunk import ChoiceDelta
+
+        delta = ChoiceDelta.model_validate({"role": "assistant"})
+        object.__setattr__(
+            delta, "__pydantic_extra__", {"reasoning_details": "not a list"}
+        )
+        with caplog.at_level("WARNING"):
+            ext = OpenRouterDeltaExtension.from_delta(delta)
+        assert ext.reasoning_details == []
+        assert ext.visible_text() == ""
+        assert any("malformed" in r.message.lower() for r in caplog.records)
+
+    def test_unknown_typed_entry_with_text_is_not_surfaced(self):
+        # Regression: the legacy extractor emitted any entry with a
+        # ``text`` or ``summary`` field.  The typed parser now filters on
+        # the recognised types so future provider metadata can't leak
+        # into the reasoning collapse.
+        ext = OpenRouterDeltaExtension(
+            reasoning_details=[
+                ReasoningDetail(type="reasoning.future", text="provider metadata"),
+                ReasoningDetail(type="reasoning.text", text="real"),
+            ]
+        )
+        assert ext.visible_text() == "real"
+
 
 class TestReasoningExtraBody:
     def test_anthropic_route_returns_fragment(self):
@@ -106,6 +148,13 @@ class TestReasoningExtraBody:
     def test_non_anthropic_route_returns_none(self):
         assert reasoning_extra_body("openai/gpt-4o", 4096) is None
         assert reasoning_extra_body("google/gemini-2.5-pro", 4096) is None
+
+    def test_zero_max_tokens_kill_switch(self):
+        # Operator kill switch: ``max_thinking_tokens <= 0`` disables the
+        # ``reasoning`` extra_body fragment even on an Anthropic route.
+        # Lets us silence reasoning without dropping the SDK path's budget.
+        assert reasoning_extra_body("anthropic/claude-sonnet-4-6", 0) is None
+        assert reasoning_extra_body("anthropic/claude-sonnet-4-6", -1) is None
 
 
 class TestBaselineReasoningEmitter:
@@ -138,8 +187,11 @@ class TestBaselineReasoningEmitter:
 
     def test_close_emits_end_and_rotates_id(self):
         emitter = BaselineReasoningEmitter()
-        emitter.on_delta(_delta(reasoning="x"))
-        first_id = emitter._block_id  # pyright: ignore[reportPrivateUsage]
+        # Capture the block id from the wire event rather than reaching
+        # into emitter internals — the id on the emitted Start/Delta is
+        # what the frontend actually receives.
+        start_events = emitter.on_delta(_delta(reasoning="x"))
+        first_id = start_events[0].id
 
         events = emitter.close()
         assert len(events) == 1
