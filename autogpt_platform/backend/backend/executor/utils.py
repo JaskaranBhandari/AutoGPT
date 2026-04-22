@@ -467,17 +467,20 @@ async def _validate_node_input_credentials(
                                 field_name
                             ] = f"{CRED_ERR_UNKNOWN_PREFIX}{cred_id}"
 
-        # If node has optional credentials and any are missing, allow running without.
-        # The executor will pass credentials=None to the block's run().
+        # If node has optional credentials and any are missing, skip the
+        # node so the executor doesn't try to execute it with None creds.
+        # The per-field loops above deliberately didn't record an error for
+        # the optional case — the "will be marked for skip after loop"
+        # contract lives here.
         if (
             has_missing_credentials
             and is_creds_optional
             and node.id not in credential_errors
         ):
             logger.info(
-                f"Node #{node.id}: optional credentials not configured, "
-                "running without"
+                f"Node #{node.id}: optional credentials not configured, " "skipping"
             )
+            nodes_to_skip.add(node.id)
 
     return credential_errors, nodes_to_skip
 

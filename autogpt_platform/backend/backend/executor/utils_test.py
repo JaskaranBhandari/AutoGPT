@@ -623,8 +623,11 @@ async def test_validate_node_input_credentials_returns_nodes_to_skip(
         nodes_input_masks=None,
     )
 
-    # Node should NOT be in nodes_to_skip (runs without credentials) and not in errors
-    assert mock_node.id not in nodes_to_skip
+    # Optional-creds + missing => skip the node (don't run it with None creds)
+    # and don't record an error. This contract is relied on by the executor
+    # which would otherwise try to run a block whose credentials never
+    # arrived.
+    assert mock_node.id in nodes_to_skip
     assert mock_node.id not in errors
 
 
@@ -1349,14 +1352,16 @@ async def test_validate_node_input_credentials_auto_creds_optional_missing(
         return_value=mock_store,
     )
 
-    errors, _nodes_to_skip = await _validate_node_input_credentials(
+    errors, nodes_to_skip = await _validate_node_input_credentials(
         graph=mock_graph,
         user_id="different-user",
         nodes_input_masks=None,
     )
 
-    # Optional auto-credential that's missing must NOT error.
+    # Optional auto-credential that's missing must NOT error — instead the
+    # node lands in nodes_to_skip so the executor doesn't try to run it.
     assert mock_node.id not in errors
+    assert mock_node.id in nodes_to_skip
 
 
 @pytest.mark.asyncio
