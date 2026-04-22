@@ -1,10 +1,10 @@
 """Tests for the ``web_search`` copilot tool.
 
-Covers the annotation extractor + cost extractor as pure units (fed with
-synthetic OpenRouter response objects), plus a light integration test
-that mocks ``AsyncOpenAI.chat.completions.create`` and confirms the
-handler plumbs through to ``persist_and_record_usage`` with
-``provider='open_router'`` and the real ``usage.cost`` value.
+Covers the result + cost extractors as pure units (fed with synthetic
+Exa response objects), plus a light integration test that mocks
+``AsyncExa.search_and_contents`` and confirms the handler plumbs
+through to ``persist_and_record_usage`` with ``provider='exa'`` and the
+real ``cost_dollars.total`` value.
 """
 
 from types import SimpleNamespace
@@ -22,63 +22,48 @@ from .web_search import (
 )
 
 
-def _fake_openrouter_response(
+def _fake_exa_response(
     *,
-    citations: list[dict] | None = None,
-    prompt_tokens: int = 120,
-    completion_tokens: int = 40,
-    cost: float | None = 0.02,
+    results: list[dict] | None = None,
+    cost_total: float | None = 0.005,
 ) -> SimpleNamespace:
-    """Build a synthetic OpenRouter Chat Completions response.
+    """Build a synthetic Exa ``SearchResponse`` object.
 
-    Matches the shape produced by ``AsyncOpenAI.chat.completions.create``
-    when the ``openrouter:web_search`` server tool runs: search results
-    arrive as ``url_citation`` annotations on ``choices[0].message``,
-    and ``usage.cost`` carries the real billed cost (tokens + search fee).
+    Matches the shape the ``exa-py`` SDK produces from
+    ``client.search_and_contents``: a list of result objects with
+    ``title`` / ``url`` / ``text`` / ``published_date`` plus a
+    ``cost_dollars`` object with a ``total`` field.
     """
-    annotations = []
-    for c in citations or []:
-        annotations.append(
-            {
-                "type": "url_citation",
-                "url_citation": {
-                    "url": c.get("url", ""),
-                    "title": c.get("title", "untitled"),
-                    "content": c.get("content", ""),
-                },
-            }
+    result_items = []
+    for r in results or []:
+        result_items.append(
+            SimpleNamespace(
+                title=r.get("title", "untitled"),
+                url=r.get("url", ""),
+                text=r.get("text", ""),
+                published_date=r.get("published_date"),
+            )
         )
-    message = SimpleNamespace(
-        role="assistant",
-        content="ok",
-        annotations=annotations,
-    )
-    choices = [SimpleNamespace(message=message, finish_reason="stop")]
-    usage = SimpleNamespace(
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
-        cost=cost,
-    )
-    return SimpleNamespace(choices=choices, usage=usage)
+    cost = SimpleNamespace(total=cost_total) if cost_total is not None else None
+    return SimpleNamespace(results=result_items, cost_dollars=cost)
 
 
 class TestExtractResults:
-    """Pin the annotation-shape contact point; an OpenRouter schema
-    change surfaces here first."""
+    """Pin the Exa SDK shape; an SDK bump surfaces here first."""
 
-    def test_extracts_title_url_snippet(self):
-        resp = _fake_openrouter_response(
-            citations=[
+    def test_extracts_title_url_text_and_published_date(self):
+        resp = _fake_exa_response(
+            results=[
                 {
                     "title": "Kimi K2.6 launch",
                     "url": "https://example.com/kimi",
-                    "content": "Moonshot released K2.6 on 2026-04-20.",
+                    "text": "Moonshot released K2.6 on 2026-04-20.",
+                    "published_date": "2026-04-20",
                 },
                 {
                     "title": "OpenRouter pricing",
                     "url": "https://openrouter.ai/moonshotai/kimi-k2.6",
-                    "content": "",
+                    "text": "",
                 },
             ]
         )
@@ -87,79 +72,58 @@ class TestExtractResults:
         assert out[0].title == "Kimi K2.6 launch"
         assert out[0].url == "https://example.com/kimi"
         assert out[0].snippet.startswith("Moonshot released")
+        assert out[0].page_age == "2026-04-20"
         assert out[1].snippet == ""
 
     def test_limit_caps_returned_results(self):
-        resp = _fake_openrouter_response(
-            citations=[
-                {"title": f"r{i}", "url": f"https://e/{i}"} for i in range(10)
-            ]
+        resp = _fake_exa_response(
+            results=[{"title": f"r{i}", "url": f"https://e/{i}"} for i in range(10)]
         )
         out = _extract_results(resp, limit=3)
         assert len(out) == 3
         assert [r.title for r in out] == ["r0", "r1", "r2"]
 
-    def test_missing_choices_returns_empty(self):
-        resp = SimpleNamespace(choices=[], usage=None)
+    def test_missing_results_returns_empty(self):
+        resp = SimpleNamespace(results=None, cost_dollars=None)
         out = _extract_results(resp, limit=10)
         assert out == []
 
-    def test_non_url_citation_annotations_are_ignored(self):
-        resp = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(
-                        role="assistant",
-                        content="ok",
-                        annotations=[
-                            {"type": "file_citation", "file_citation": {}},
-                            {
-                                "type": "url_citation",
-                                "url_citation": {
-                                    "url": "https://real.example",
-                                    "title": "real",
-                                    "content": "body",
-                                },
-                            },
-                        ],
-                    )
-                )
-            ],
-            usage=None,
+    def test_snippet_clamped_to_max_chars(self):
+        long_body = "x" * 5000
+        resp = _fake_exa_response(
+            results=[{"title": "t", "url": "https://e", "text": long_body}]
         )
-        out = _extract_results(resp, limit=10)
-        assert len(out) == 1 and out[0].title == "real"
+        out = _extract_results(resp, limit=1)
+        assert len(out) == 1
+        assert len(out[0].snippet) == 500
 
 
 class TestExtractCostUsd:
-    """Read real ``usage.cost`` from OpenRouter — no hard-coded rates,
-    so a future provider price change is automatically reflected."""
+    """Read real ``cost_dollars.total`` from Exa — no hard-coded rates,
+    so a future Exa price change is automatically reflected."""
 
-    def test_returns_cost_value(self):
-        resp = _fake_openrouter_response(cost=0.023456)
-        assert _extract_cost_usd(resp) == pytest.approx(0.023456)
+    def test_returns_total_value(self):
+        resp = _fake_exa_response(cost_total=0.00823)
+        assert _extract_cost_usd(resp) == pytest.approx(0.00823)
 
-    def test_returns_none_when_usage_missing(self):
-        resp = SimpleNamespace(choices=[], usage=None)
+    def test_returns_none_when_cost_dollars_missing(self):
+        resp = SimpleNamespace(results=[], cost_dollars=None)
         assert _extract_cost_usd(resp) is None
 
-    def test_returns_none_when_cost_missing(self):
-        usage = SimpleNamespace(prompt_tokens=10, completion_tokens=5)
-        resp = SimpleNamespace(choices=[], usage=usage)
-        assert _extract_cost_usd(resp) is None
+    def test_supports_dict_shape(self):
+        resp = SimpleNamespace(results=[], cost_dollars={"total": 0.012})
+        assert _extract_cost_usd(resp) == pytest.approx(0.012)
 
-    def test_survives_string_cost(self):
-        # OpenRouter has shipped both float and string ``cost`` at
-        # different points; coerce safely.
-        usage = SimpleNamespace(cost="0.017")
-        resp = SimpleNamespace(choices=[], usage=usage)
+    def test_survives_string_total(self):
+        resp = SimpleNamespace(results=[], cost_dollars=SimpleNamespace(total="0.017"))
         assert _extract_cost_usd(resp) == pytest.approx(0.017)
 
 
 class TestWebSearchToolDispatch:
-    """Lightweight integration test: mock the OpenAI client, confirm
-    the handler returns a ``WebSearchResponse`` and the usage tracker is
-    called with ``provider='open_router'`` and the real ``usage.cost``."""
+    """Lightweight integration test: mock ``AsyncExa.search_and_contents``,
+    confirm the handler returns a ``WebSearchResponse`` and the usage
+    tracker is called with ``provider='exa'`` and the real
+    ``cost_dollars.total`` value."""
 
     def _session(self) -> ChatSession:
         s = ChatSession.new("test-user", dry_run=False)
@@ -168,45 +132,30 @@ class TestWebSearchToolDispatch:
 
     @pytest.mark.asyncio
     async def test_returns_response_with_results_and_tracks_cost(self, monkeypatch):
-        fake_resp = _fake_openrouter_response(
-            citations=[
+        fake_resp = _fake_exa_response(
+            results=[
                 {
                     "title": "hello",
                     "url": "https://example.com",
-                    "content": "greeting",
+                    "text": "greeting",
                 }
             ],
-            cost=0.0214,
+            cost_total=0.005,
         )
-        mock_client = type(
-            "MC",
-            (),
-            {
-                "chat": type(
-                    "C",
-                    (),
-                    {
-                        "completions": type(
-                            "CC",
-                            (),
-                            {"create": AsyncMock(return_value=fake_resp)},
-                        )()
-                    },
-                )()
-            },
-        )()
+        mock_client = SimpleNamespace(
+            search_and_contents=AsyncMock(return_value=fake_resp)
+        )
 
         monkeypatch.setattr(
-            "backend.copilot.tools.web_search._chat_config",
-            SimpleNamespace(
-                api_key="sk-test",
-                base_url="https://openrouter.ai/api/v1",
+            "backend.copilot.tools.web_search.Settings",
+            lambda: SimpleNamespace(
+                secrets=SimpleNamespace(exa_api_key="exa-test")
             ),
         )
 
         with (
             patch(
-                "backend.copilot.tools.web_search.AsyncOpenAI",
+                "backend.copilot.tools.web_search.AsyncExa",
                 return_value=mock_client,
             ),
             patch(
@@ -228,26 +177,24 @@ class TestWebSearchToolDispatch:
         assert isinstance(result.results[0], WebSearchResult)
         assert result.search_requests == 1
 
-        # Cost tracker called with provider="open_router" and the real
-        # ``usage.cost`` value (NOT an estimate).
         assert mock_track.await_count == 1
         kwargs = mock_track.await_args.kwargs
-        assert kwargs["provider"] == "open_router"
-        assert kwargs["model"] == "openai/gpt-4o-mini"
+        assert kwargs["provider"] == "exa"
+        assert kwargs["model"] == "exa/search_and_contents"
         assert kwargs["user_id"] == "u1"
-        assert kwargs["cost_usd"] == pytest.approx(0.0214)
+        assert kwargs["cost_usd"] == pytest.approx(0.005)
 
     @pytest.mark.asyncio
-    async def test_missing_credentials_returns_error(self, monkeypatch):
+    async def test_missing_api_key_returns_error(self, monkeypatch):
         monkeypatch.setattr(
-            "backend.copilot.tools.web_search._chat_config",
-            SimpleNamespace(api_key="", base_url=""),
+            "backend.copilot.tools.web_search.Settings",
+            lambda: SimpleNamespace(secrets=SimpleNamespace(exa_api_key="")),
         )
-        openai_stub = AsyncMock()
+        exa_stub = AsyncMock()
         with (
             patch(
-                "backend.copilot.tools.web_search.AsyncOpenAI",
-                return_value=openai_stub,
+                "backend.copilot.tools.web_search.AsyncExa",
+                return_value=exa_stub,
             ),
             patch(
                 "backend.copilot.tools.web_search.persist_and_record_usage",
@@ -263,22 +210,21 @@ class TestWebSearchToolDispatch:
             )
         assert isinstance(result, ErrorResponse)
         assert result.error == "web_search_not_configured"
-        openai_stub.chat.completions.create.assert_not_called()
+        exa_stub.search_and_contents.assert_not_called()
         mock_track.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_empty_query_rejected_without_api_call(self, monkeypatch):
         monkeypatch.setattr(
-            "backend.copilot.tools.web_search._chat_config",
-            SimpleNamespace(
-                api_key="sk-test",
-                base_url="https://openrouter.ai/api/v1",
+            "backend.copilot.tools.web_search.Settings",
+            lambda: SimpleNamespace(
+                secrets=SimpleNamespace(exa_api_key="exa-test")
             ),
         )
-        openai_stub = AsyncMock()
+        exa_stub = AsyncMock()
         with patch(
-            "backend.copilot.tools.web_search.AsyncOpenAI",
-            return_value=openai_stub,
+            "backend.copilot.tools.web_search.AsyncExa",
+            return_value=exa_stub,
         ):
             tool = WebSearchTool()
             result = await tool._execute(
@@ -286,7 +232,7 @@ class TestWebSearchToolDispatch:
             )
         assert isinstance(result, ErrorResponse)
         assert result.error == "missing_query"
-        openai_stub.chat.completions.create.assert_not_called()
+        exa_stub.search_and_contents.assert_not_called()
 
 
 class TestToolRegistryIntegration:

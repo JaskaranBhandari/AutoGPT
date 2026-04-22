@@ -1,40 +1,28 @@
-"""Web search tool — wraps OpenRouter's ``openrouter:web_search`` server tool.
+"""Web search tool — direct Exa client.
 
-OpenRouter's server tool runs the search, injects results into the
-assistant message as ``url_citation`` annotations, and bills the search
-fee inside the same ``usage.cost`` line as the dispatch model.  Benefits:
-
-* real per-call billing (no hard-coded pricing constants here); and
-* the cost auto-flows through ``persist_and_record_usage`` into the
-  daily / weekly microdollar rate-limit counter on the same rails as
-  every other OpenRouter turn.
-
-The older ``plugins: [{id: "web"}]`` + ``:online`` API are deprecated
-upstream; the server tool is the supported path going forward.
+Skips the dispatch-model round-trip entirely: we call Exa directly, get
+structured results back, and use Exa's ``cost_dollars.total`` for real
+per-call billing.  No inference tax on top of the search fee —
+``search_and_contents`` at 5 results is ~$0.012/call flat.
 """
 
 import logging
 from typing import Any
 
-from openai import AsyncOpenAI
+from exa_py import AsyncExa
 
-from backend.copilot.config import ChatConfig
 from backend.copilot.model import ChatSession
 from backend.copilot.token_tracking import persist_and_record_usage
-
-_chat_config = ChatConfig()
+from backend.util.settings import Settings
 
 from .base import BaseTool
 from .models import ErrorResponse, ToolResponseBase, WebSearchResponse, WebSearchResult
 
 logger = logging.getLogger(__name__)
 
-# A small, cheap model is fine — it only has to decide-and-call the
-# server tool, not summarise anything.  Override via env if needed.
-_WEB_SEARCH_DISPATCH_MODEL = "openai/gpt-4o-mini"
-_MAX_DISPATCH_TOKENS = 64
 _DEFAULT_MAX_RESULTS = 5
 _HARD_MAX_RESULTS = 20
+_SNIPPET_MAX_CHARS = 500
 
 
 class WebSearchTool(BaseTool):
@@ -79,7 +67,7 @@ class WebSearchTool(BaseTool):
 
     @property
     def is_available(self) -> bool:
-        return bool(_chat_config.api_key and _chat_config.base_url)
+        return bool(Settings().secrets.exa_api_key)
 
     async def _execute(
         self,
@@ -104,40 +92,27 @@ class WebSearchTool(BaseTool):
             max_results = _DEFAULT_MAX_RESULTS
         max_results = max(1, min(max_results, _HARD_MAX_RESULTS))
 
-        if not _chat_config.api_key or not _chat_config.base_url:
+        api_key = Settings().secrets.exa_api_key
+        if not api_key:
             return ErrorResponse(
                 message=(
                     "Web search is unavailable — the deployment has no "
-                    "OpenRouter credentials configured."
+                    "Exa API key configured."
                 ),
                 error="web_search_not_configured",
                 session_id=session_id,
             )
 
-        client = AsyncOpenAI(
-            api_key=_chat_config.api_key, base_url=_chat_config.base_url
-        )
+        client = AsyncExa(api_key=api_key)
         try:
-            resp = await client.chat.completions.create(
-                model=_WEB_SEARCH_DISPATCH_MODEL,
-                max_tokens=_MAX_DISPATCH_TOKENS,
-                messages=[{"role": "user", "content": query}],
-                extra_body={
-                    "tools": [
-                        {
-                            "type": "openrouter:web_search",
-                            "openrouter:web_search": {
-                                "max_results": max_results,
-                            },
-                        }
-                    ],
-                    "tool_choice": "required",
-                    "usage": {"include": True},
-                },
+            resp = await client.search_and_contents(
+                query=query,
+                num_results=max_results,
+                text={"max_characters": _SNIPPET_MAX_CHARS},
             )
         except Exception as exc:
             logger.warning(
-                "[web_search] OpenRouter call failed for query=%r: %s", query, exc
+                "[web_search] Exa call failed for query=%r: %s", query, exc
             )
             return ErrorResponse(
                 message=f"Web search failed: {exc}",
@@ -149,16 +124,15 @@ class WebSearchTool(BaseTool):
         cost_usd = _extract_cost_usd(resp)
 
         try:
-            usage = getattr(resp, "usage", None)
             await persist_and_record_usage(
                 session=session,
                 user_id=user_id,
-                prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-                completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                prompt_tokens=0,
+                completion_tokens=0,
                 log_prefix="[web_search]",
                 cost_usd=cost_usd,
-                model=_WEB_SEARCH_DISPATCH_MODEL,
-                provider="open_router",
+                model="exa/search_and_contents",
+                provider="exa",
             )
         except Exception as exc:
             logger.warning("[web_search] usage tracking failed: %s", exc)
@@ -173,54 +147,43 @@ class WebSearchTool(BaseTool):
 
 
 def _extract_results(resp: Any, *, limit: int) -> list[WebSearchResult]:
-    """Pull ``url_citation`` annotations from the OpenRouter response.
-
-    OpenRouter's web plugin injects search results as annotations on the
-    assistant message: ``{type: "url_citation", url_citation: {url, title,
-    content, ...}}``.  Other annotation types (if any) are ignored.
-    """
-    results: list[WebSearchResult] = []
-    choices = getattr(resp, "choices", []) or []
-    if not choices:
-        return results
-
-    message = getattr(choices[0], "message", None)
-    annotations = getattr(message, "annotations", None) or []
-    for ann in annotations:
-        if len(results) >= limit:
-            break
-        ann_type = _get(ann, "type")
-        if ann_type != "url_citation":
-            continue
-        citation = _get(ann, "url_citation") or {}
-        results.append(
+    """Map Exa ``SearchResponse.results`` to our WebSearchResult shape."""
+    out: list[WebSearchResult] = []
+    for r in (getattr(resp, "results", None) or [])[:limit]:
+        snippet = (_get(r, "text") or "")[:_SNIPPET_MAX_CHARS]
+        out.append(
             WebSearchResult(
-                title=_get(citation, "title") or "",
-                url=_get(citation, "url") or "",
-                snippet=(_get(citation, "content") or "")[:500],
-                page_age=None,
+                title=_get(r, "title") or "",
+                url=_get(r, "url") or "",
+                snippet=snippet,
+                page_age=_get(r, "published_date"),
             )
         )
-    return results
+    return out
 
 
 def _extract_cost_usd(resp: Any) -> float | None:
-    """Return the real per-call cost from OpenRouter's ``usage.cost`` field."""
-    usage = getattr(resp, "usage", None)
-    if usage is None:
+    """Return ``cost_dollars.total`` from the Exa response, else None.
+
+    Exa ships a structured ``cost_dollars`` object with a ``total`` field.
+    Older SDK versions expose it as a string; guard both shapes so we
+    never crash accounting on a schema variance.
+    """
+    cost = getattr(resp, "cost_dollars", None)
+    if cost is None:
         return None
-    val = getattr(usage, "cost", None)
-    if val is None and hasattr(usage, "model_dump"):
-        val = usage.model_dump().get("cost")
+    total = getattr(cost, "total", None)
+    if total is None and isinstance(cost, dict):
+        total = cost.get("total")
     try:
-        return float(val) if val is not None else None
+        return float(total) if total is not None else None
     except (TypeError, ValueError):
         return None
 
 
 def _get(obj: Any, key: str) -> Any:
-    """Uniform attribute / dict key access — OpenRouter's annotation shape
-    varies across SDK versions (dict for raw JSON, pydantic for parsed)."""
+    """Uniform attribute / dict key access — Exa's result shape varies
+    between the pydantic SDK objects and raw dicts on older paths."""
     if isinstance(obj, dict):
         return obj.get(key)
     return getattr(obj, key, None)
