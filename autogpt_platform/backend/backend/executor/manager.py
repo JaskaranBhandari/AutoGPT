@@ -154,61 +154,73 @@ async def _acquire_auto_credentials(
     extra_exec_kwargs: dict[str, Any] = {}
     locks: list[AsyncRedisLock] = []
 
-    # NOTE: If a block ever has multiple auto-credential fields, a ValueError
-    # on a later field will strand locks acquired for earlier fields. They'll
-    # auto-expire via Redis TTL, but add a try/except to release partial locks
-    # if that becomes a real scenario.
-    for kwarg_name, info in input_model.get_auto_credentials_fields().items():
-        field_name = info["field_name"]
-        field_data = input_data.get(field_name)
+    try:
+        for kwarg_name, info in input_model.get_auto_credentials_fields().items():
+            field_name = info["field_name"]
+            field_data = input_data.get(field_name)
 
-        if field_data and isinstance(field_data, dict):
-            # Check if _credentials_id key exists in the field data
-            if "_credentials_id" in field_data:
-                cred_id = field_data["_credentials_id"]
-                if cred_id:
-                    # Credential ID provided - acquire credentials
+            if field_data and isinstance(field_data, dict):
+                # Check if _credentials_id key exists in the field data
+                if "_credentials_id" in field_data:
+                    cred_id = field_data["_credentials_id"]
+                    if cred_id:
+                        # Credential ID provided - acquire credentials
+                        provider = info.get("config", {}).get(
+                            "provider", "external service"
+                        )
+                        file_name = field_data.get("name", "selected file")
+                        try:
+                            credentials, lock = await creds_manager.acquire(
+                                user_id, cred_id
+                            )
+                            locks.append(lock)
+                            extra_exec_kwargs[kwarg_name] = credentials
+                        except ValueError:
+                            raise ValueError(
+                                f"{provider.capitalize()} credentials for "
+                                f"'{file_name}' in field '{field_name}' are not "
+                                f"available in your account. "
+                                f"This can happen if the agent was created by another "
+                                f"user or the credentials were deleted. "
+                                f"Please open the agent in the builder and re-select "
+                                f"the file to authenticate with your own account."
+                            )
+                    # else: _credentials_id is explicitly None, skip (chained data)
+                else:
+                    # _credentials_id key missing entirely - this is an error
                     provider = info.get("config", {}).get(
                         "provider", "external service"
                     )
                     file_name = field_data.get("name", "selected file")
-                    try:
-                        credentials, lock = await creds_manager.acquire(
-                            user_id, cred_id
-                        )
-                        locks.append(lock)
-                        extra_exec_kwargs[kwarg_name] = credentials
-                    except ValueError:
-                        raise ValueError(
-                            f"{provider.capitalize()} credentials for "
-                            f"'{file_name}' in field '{field_name}' are not "
-                            f"available in your account. "
-                            f"This can happen if the agent was created by another "
-                            f"user or the credentials were deleted. "
-                            f"Please open the agent in the builder and re-select "
-                            f"the file to authenticate with your own account."
-                        )
-                # else: _credentials_id is explicitly None, skip (chained data)
+                    raise ValueError(
+                        f"Authentication missing for '{file_name}' in field "
+                        f"'{field_name}'. Please re-select the file to authenticate "
+                        f"with {provider.capitalize()}."
+                    )
+            elif field_data is None and field_name not in input_data:
+                # Field not in input_data at all = connected from upstream block, skip
+                pass
             else:
-                # _credentials_id key missing entirely - this is an error
+                # field_data is None/empty but key IS in input_data = user didn't select
                 provider = info.get("config", {}).get("provider", "external service")
-                file_name = field_data.get("name", "selected file")
                 raise ValueError(
-                    f"Authentication missing for '{file_name}' in field "
-                    f"'{field_name}'. Please re-select the file to authenticate "
-                    f"with {provider.capitalize()}."
+                    f"No file selected for '{field_name}'. "
+                    f"Please select a file to provide "
+                    f"{provider.capitalize()} authentication."
                 )
-        elif field_data is None and field_name not in input_data:
-            # Field not in input_data at all = connected from upstream block, skip
-            pass
-        else:
-            # field_data is None/empty but key IS in input_data = user didn't select
-            provider = info.get("config", {}).get("provider", "external service")
-            raise ValueError(
-                f"No file selected for '{field_name}'. "
-                f"Please select a file to provide "
-                f"{provider.capitalize()} authentication."
-            )
+    except BaseException:
+        # Release any locks already acquired so failures on later fields
+        # don't strand earlier credentials until Redis TTL expires them.
+        for lock in locks:
+            try:
+                await lock.release()
+            except Exception as release_exc:
+                _logger.warning(
+                    "Failed to release auto-credential lock after acquisition "
+                    "error: %s",
+                    release_exc,
+                )
+        raise
 
     return extra_exec_kwargs, locks
 

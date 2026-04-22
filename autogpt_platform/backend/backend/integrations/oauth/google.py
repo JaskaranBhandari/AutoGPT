@@ -118,7 +118,11 @@ class GoogleOAuthHandler(BaseOAuthHandler):
         if not credentials.access_token:
             return False
 
-        response = await Requests().post(
+        # raise_for_status=False so a 400 (already-revoked token, malformed
+        # body, rate limit, etc.) flows back as response.ok=False instead of
+        # raising — the caller uses the bool to set the UI `revoked` flag
+        # and does not need to distinguish failure modes.
+        response = await Requests(raise_for_status=False).post(
             self.revoke_uri,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             data={"token": credentials.access_token.get_secret_value()},

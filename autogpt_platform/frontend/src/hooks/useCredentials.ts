@@ -105,10 +105,13 @@ export default function useCredentials(
 
     if (c.type === "oauth2") {
       const requiredScopes = credsInputSchema.credentials_scopes;
-      if (
-        !requiredScopes ||
-        new Set(c.scopes).isSupersetOf(new Set(requiredScopes))
-      ) {
+      // Set.prototype.isSupersetOf is ES2025 and this project targets
+      // ES2022 — fall back to an array every() check so the picker's
+      // scope filter runs cleanly on current Node/browser baselines.
+      const credScopes = new Set(c.scopes);
+      const hasAllScopes =
+        !requiredScopes || requiredScopes.every((s) => credScopes.has(s));
+      if (hasAllScopes) {
         savedCredentials.push(c);
       } else {
         upgradeableCredentials.push(c);

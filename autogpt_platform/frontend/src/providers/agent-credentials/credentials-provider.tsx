@@ -118,12 +118,8 @@ export default function CredentialsProvider({
       state_token: string,
     ): Promise<CredentialsMetaResponse> => {
       try {
-        const credsMeta = await api.oAuthCallback(
-          provider as string,
-          code,
-          state_token,
-        );
-        upsertCredentials(provider as string, credsMeta);
+        const credsMeta = await api.oAuthCallback(provider, code, state_token);
+        upsertCredentials(provider, credsMeta);
         return credsMeta;
       } catch (error) {
         onFailToast("complete OAuth authentication")(error);
@@ -235,11 +231,7 @@ export default function CredentialsProvider({
       CredentialsDeleteResponse | CredentialsDeleteNeedConfirmationResponse
     > => {
       try {
-        const result = await api.deleteCredentials(
-          provider as string,
-          id,
-          force,
-        );
+        const result = await api.deleteCredentials(provider, id, force);
         if (!result.deleted) {
           return result;
         }
@@ -295,7 +287,7 @@ export default function CredentialsProvider({
                 provider,
                 {
                   provider,
-                  providerName: toDisplayName(provider as string),
+                  providerName: toDisplayName(provider),
                   savedCredentials: providerCredentials,
                   isSystemProvider: systemProviders.has(provider),
                   oAuthCallback: (code: string, state_token: string) =>

@@ -308,6 +308,22 @@ class PickerTokenResponse(BaseModel):
     )
 
 
+# Allowlist of (provider, scopes) tuples that may mint picker tokens. Only
+# Drive-picker-capable scopes qualify so a caller can't use this endpoint to
+# extract a GitHub / other-provider OAuth token for unrelated purposes. If a
+# future provider integrates a hosted picker that needs a raw access token,
+# add its specific picker-relevant scopes here.
+_PICKER_TOKEN_ALLOWED_SCOPES: dict[ProviderName, frozenset[str]] = {
+    ProviderName.GOOGLE: frozenset(
+        [
+            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/drive.readonly",
+            "https://www.googleapis.com/auth/drive",
+        ]
+    ),
+}
+
+
 @router.post(
     "/{provider}/credentials/{cred_id}/picker-token",
     summary="Issue a short-lived access token for a provider-hosted picker",
@@ -357,6 +373,26 @@ async def get_picker_token(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Credential has no access token; reconnect the account",
+        )
+
+    # Gate on provider+scope: only credentials that actually grant access to
+    # a provider-hosted picker flow may mint a token through this endpoint.
+    # Prevents using this path to extract bearer tokens for unrelated OAuth
+    # integrations (e.g. GitHub) that happen to be stored under the same user.
+    allowed_scopes = _PICKER_TOKEN_ALLOWED_SCOPES.get(provider)
+    if not allowed_scopes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(f"Picker tokens are not available for provider '{provider.value}'"),
+        )
+    cred_scopes = set(credential.scopes or [])
+    if cred_scopes.isdisjoint(allowed_scopes):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Credential does not grant any scope eligible for the picker. "
+                "Reconnect with the appropriate scope."
+            ),
         )
 
     return PickerTokenResponse(
@@ -676,6 +712,14 @@ async def _prepare_scope_upgrade(
 
     Raises HTTPException on validation failure.
     """
+    # Platform-owned system credentials must never be upgraded — scope
+    # changes here would leak across every user that shares them.
+    if is_system_credential(credential_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="System credentials cannot be upgraded",
+        )
+
     existing = await creds_manager.store.get_creds_by_id(user_id, credential_id)
     if not existing:
         raise HTTPException(
@@ -741,7 +785,16 @@ async def _merge_or_create_credential(
         None,
     )
     if matching:
-        return await _upgrade_existing_credential(user_id, matching.id, credentials)
+        # Only merge into the existing credential when the new token
+        # already covers every scope we're about to advertise on it.
+        # Without this guard we'd overwrite ``matching.access_token`` with
+        # a narrower token while storing a wider ``scopes`` list — the
+        # record would claim authorizations the token does not grant, and
+        # blocks using the lost scopes would fail with opaque 401/403s
+        # until the user hits re-auth.  On a narrowing login, keep the
+        # two credentials separate instead.
+        if set(credentials.scopes).issuperset(set(matching.scopes)):
+            return await _upgrade_existing_credential(user_id, matching.id, credentials)
 
     await creds_manager.create(user_id, credentials)
     return credentials
@@ -783,6 +836,18 @@ async def _upgrade_existing_credential(
         **(existing.metadata or {}),
         **(new_credentials.metadata or {}),
     }
+    # Preserve the existing refresh_token and username if the incremental
+    # response doesn't carry them.  Providers like Google only return a
+    # refresh_token on first authorization — dropping it here would orphan
+    # the credential on the next access-token expiry, forcing the user to
+    # re-auth from scratch. Username is similarly sticky: if we've already
+    # resolved it for this credential, keep it rather than silently
+    # blanking it on an incremental upgrade.
+    if not new_credentials.refresh_token and existing.refresh_token:
+        new_credentials.refresh_token = existing.refresh_token
+        new_credentials.refresh_token_expires_at = existing.refresh_token_expires_at
+    if not new_credentials.username and existing.username:
+        new_credentials.username = existing.username
     await creds_manager.update(user_id, new_credentials)
     return new_credentials
 

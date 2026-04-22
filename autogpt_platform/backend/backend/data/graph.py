@@ -693,13 +693,18 @@ class GraphModel(Graph, GraphMeta):
 
         # Clear auto-credentials references (e.g., _credentials_id in
         # GoogleDriveFile fields) so the new user must re-authenticate
-        # with their own account
+        # with their own account. We null the entire field rather than
+        # just the _credentials_id key — a partial object (e.g. a bare
+        # {"id": "...", "name": "..."} left over after stripping) would
+        # be rejected by the auto-credentials validator added below,
+        # breaking fork_graph() for agents that previously had a
+        # picker-selected Drive file.
         for node in graph.nodes:
             if not node.input_default:
                 continue
-            for key, value in node.input_default.items():
+            for key, value in list(node.input_default.items()):
                 if isinstance(value, dict) and "_credentials_id" in value:
-                    del value["_credentials_id"]
+                    node.input_default[key] = None
 
     def validate_graph(
         self,

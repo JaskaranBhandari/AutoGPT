@@ -421,6 +421,9 @@ async def _validate_node_input_credentials(
         if auto_credentials_fields:
             for _kwarg_name, info in auto_credentials_fields.items():
                 field_name = info["field_name"]
+                field_is_optional = (
+                    is_creds_optional or field_name not in required_fields
+                )
                 # Check input_default and nodes_input_masks for the field value
                 field_value = node.input_default.get(field_name)
                 if nodes_input_masks and node.id in nodes_input_masks:
@@ -430,12 +433,17 @@ async def _validate_node_input_credentials(
 
                 if field_value and isinstance(field_value, dict):
                     if "_credentials_id" not in field_value:
-                        # Key removed (e.g., on fork) — needs re-auth
+                        # Key removed (e.g., on fork) — needs re-auth. Use the
+                        # CRED_ERR_NOT_AVAILABLE_PREFIX marker so the copilot
+                        # credential-race fallback recognises this as a
+                        # credentials gate failure.
                         has_missing_credentials = True
+                        if field_is_optional:
+                            continue
                         credential_errors[node.id][field_name] = (
-                            "Authentication missing for the selected file. "
-                            "Please re-select the file to authenticate with "
-                            "your own account."
+                            f"{CRED_ERR_NOT_AVAILABLE_PREFIX} authentication "
+                            "missing for the selected file. Please re-select "
+                            "the file to authenticate with your own account."
                         )
                         continue
                     cred_id = field_value.get("_credentials_id")
@@ -445,17 +453,19 @@ async def _validate_node_input_credentials(
                             creds = await creds_store.get_creds_by_id(user_id, cred_id)
                         except Exception as e:
                             has_missing_credentials = True
+                            if field_is_optional:
+                                continue
                             credential_errors[node.id][
                                 field_name
-                            ] = f"Credentials not available: {e}"
+                            ] = f"{CRED_ERR_NOT_AVAILABLE_PREFIX} {e}"
                             continue
                         if not creds:
                             has_missing_credentials = True
-                            credential_errors[node.id][field_name] = (
-                                "The saved credentials are not available "
-                                "for your account. Please re-select the file to "
-                                "authenticate with your own account."
-                            )
+                            if field_is_optional:
+                                continue
+                            credential_errors[node.id][
+                                field_name
+                            ] = f"{CRED_ERR_UNKNOWN_PREFIX}{cred_id}"
 
         # If node has optional credentials and any are missing, allow running without.
         # The executor will pass credentials=None to the block's run().

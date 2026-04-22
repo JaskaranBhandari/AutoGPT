@@ -317,4 +317,60 @@ async def test_auto_credentials_multiple_fields(
     manager.acquire.assert_called_once_with("user-1", "cred-id-123")
     assert "credentials" in extra_kwargs
     assert "credentials2" not in extra_kwargs
-    assert len(locks) == 1
+
+
+@pytest.mark.asyncio
+async def test_acquire_auto_credentials_releases_partial_locks_on_failure(
+    mocker: MockerFixture,
+):
+    """When acquiring a later auto-credential field raises, any locks
+    already taken for earlier fields must be released — otherwise they'd
+    sit until Redis TTL expires, blocking the next execution."""
+    from backend.executor.manager import _acquire_auto_credentials
+
+    manager = mocker.AsyncMock()
+    good_creds = mocker.MagicMock()
+    good_creds.id = "cred-id-good"
+    good_lock = mocker.AsyncMock()
+
+    async def _acquire(_user_id, cred_id):
+        if cred_id == "cred-id-good":
+            return (good_creds, good_lock)
+        raise ValueError(f"bad cred {cred_id}")
+
+    manager.acquire.side_effect = _acquire
+
+    input_model = mocker.MagicMock()
+    input_model.get_auto_credentials_fields.return_value = {
+        "credentials": {
+            "field_name": "spreadsheet",
+            "config": {"provider": "google", "type": "oauth2"},
+        },
+        "credentials2": {
+            "field_name": "doc_file",
+            "config": {"provider": "google", "type": "oauth2"},
+        },
+    }
+
+    input_data = {
+        "spreadsheet": {
+            "_credentials_id": "cred-id-good",
+            "id": "file-1",
+            "name": "file1.xlsx",
+        },
+        "doc_file": {
+            "_credentials_id": "cred-id-broken",
+            "id": "file-2",
+            "name": "file2.doc",
+        },
+    }
+
+    with pytest.raises(ValueError):
+        await _acquire_auto_credentials(
+            input_model=input_model,
+            input_data=input_data,
+            creds_manager=manager,
+            user_id="user-1",
+        )
+
+    good_lock.release.assert_awaited_once()

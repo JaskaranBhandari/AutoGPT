@@ -581,12 +581,19 @@ class TestGetPickerToken:
        this picker-token endpoint exists."""
 
     def test_oauth2_owner_gets_access_token(self):
-        cred = _make_oauth2_cred()
+        # Use a Google cred with a drive.file scope — only picker-eligible
+        # (provider, scope) pairs can mint a token. GitHub-style creds are
+        # explicitly rejected; see `test_non_picker_provider_rejected_as_400`.
+        cred = _make_oauth2_cred(
+            cred_id="cred-gdrive",
+            provider="google",
+        )
+        cred.scopes = ["https://www.googleapis.com/auth/drive.file"]
         with patch(
             "backend.api.features.integrations.router.creds_manager"
         ) as mock_mgr:
             mock_mgr.get = AsyncMock(return_value=cred)
-            resp = client.post("/github/credentials/cred-456/picker-token")
+            resp = client.post("/google/credentials/cred-gdrive/picker-token")
 
         assert resp.status_code == 200
         data = resp.json()
@@ -594,6 +601,41 @@ class TestGetPickerToken:
         assert data["access_token"] == "ghp_secret_token"
         # Only the two declared fields come back — nothing else leaks.
         assert set(data.keys()) <= {"access_token", "access_token_expires_at"}
+
+    def test_non_picker_provider_rejected_as_400(self):
+        """Provider allowlist: even with a valid OAuth2 credential, a
+        non-picker provider (GitHub, etc.) cannot mint a picker token.
+        Stops this endpoint from being used as a generic bearer-token
+        extraction path for any stored OAuth cred under the same user."""
+        cred = _make_oauth2_cred(provider="github")
+        with patch(
+            "backend.api.features.integrations.router.creds_manager"
+        ) as mock_mgr:
+            mock_mgr.get = AsyncMock(return_value=cred)
+            resp = client.post("/github/credentials/cred-456/picker-token")
+
+        assert resp.status_code == 400
+        assert "not available for provider" in resp.json()["detail"]
+        assert "ghp_secret_token" not in str(resp.json())
+
+    def test_google_oauth_without_drive_scope_rejected(self):
+        """Scope allowlist: a Google OAuth2 cred that only carries non-picker
+        scopes (e.g. gmail.readonly, calendar) cannot mint a picker token.
+        Forces the frontend to reconnect with a Drive scope before the
+        picker is available."""
+        cred = _make_oauth2_cred(provider="google")
+        cred.scopes = [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/calendar",
+        ]
+        with patch(
+            "backend.api.features.integrations.router.creds_manager"
+        ) as mock_mgr:
+            mock_mgr.get = AsyncMock(return_value=cred)
+            resp = client.post("/google/credentials/cred-456/picker-token")
+
+        assert resp.status_code == 400
+        assert "picker" in resp.json()["detail"].lower()
 
     def test_api_key_credential_rejected_as_400(self):
         cred = _make_api_key_cred()

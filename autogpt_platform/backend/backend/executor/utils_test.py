@@ -1193,6 +1193,9 @@ async def test_validate_node_input_credentials_auto_creds_missing(
             "config": {"provider": "google", "type": "oauth2"},
         }
     }
+    # The auto-credentials validator respects optional fields — mark the
+    # spreadsheet field as required so the missing-cred error is recorded.
+    mock_block.input_schema.get_required_fields.return_value = ["spreadsheet"]
     mock_node.block = mock_block
 
     mock_graph = mocker.MagicMock()
@@ -1214,7 +1217,11 @@ async def test_validate_node_input_credentials_auto_creds_missing(
 
     assert mock_node.id in errors
     assert "spreadsheet" in errors[mock_node.id]
-    assert "not available" in errors[mock_node.id]["spreadsheet"].lower()
+    # Error message uses the CRED_ERR_UNKNOWN_PREFIX marker so the copilot
+    # credential-race fallback recognises it as a credentials gate failure.
+    assert errors[mock_node.id]["spreadsheet"].lower().startswith(
+        "unknown credentials #"
+    )
 
 
 @pytest.mark.asyncio
@@ -1299,6 +1306,105 @@ async def test_validate_node_input_credentials_both_regular_and_auto(
     # Both should validate successfully - no errors
     assert mock_node.id not in errors
     assert mock_node.id not in nodes_to_skip
+
+
+@pytest.mark.asyncio
+async def test_validate_node_input_credentials_auto_creds_optional_missing(
+    mocker: MockerFixture,
+):
+    """When a node marks credentials optional and the auto-credential is
+    missing, validation should not record an error — the node is simply
+    marked for skip or runs without credentials."""
+    from backend.executor.utils import _validate_node_input_credentials
+
+    mock_node = mocker.MagicMock()
+    mock_node.id = "node-optional-auto-creds"
+    mock_node.credentials_optional = True
+    mock_node.input_default = {
+        "spreadsheet": {
+            "_credentials_id": "other-users-cred-id",
+            "id": "file-123",
+            "name": "test.xlsx",
+        }
+    }
+
+    mock_block = mocker.MagicMock()
+    mock_block.input_schema.get_credentials_fields.return_value = {}
+    mock_block.input_schema.get_auto_credentials_fields.return_value = {
+        "credentials": {
+            "field_name": "spreadsheet",
+            "config": {"provider": "google", "type": "oauth2"},
+        }
+    }
+    mock_block.input_schema.get_required_fields.return_value = ["spreadsheet"]
+    mock_node.block = mock_block
+
+    mock_graph = mocker.MagicMock()
+    mock_graph.nodes = [mock_node]
+
+    mock_store = mocker.MagicMock()
+    mock_store.get_creds_by_id = mocker.AsyncMock(return_value=None)
+    mocker.patch(
+        "backend.executor.utils.get_integration_credentials_store",
+        return_value=mock_store,
+    )
+
+    errors, _nodes_to_skip = await _validate_node_input_credentials(
+        graph=mock_graph,
+        user_id="different-user",
+        nodes_input_masks=None,
+    )
+
+    # Optional auto-credential that's missing must NOT error.
+    assert mock_node.id not in errors
+
+
+@pytest.mark.asyncio
+async def test_validate_node_input_credentials_auto_creds_uses_marker_prefix(
+    mocker: MockerFixture,
+):
+    """Auto-credential errors must use ``CRED_ERR_*`` prefixes so the copilot
+    credential-race fallback recognises them — otherwise dry runs fail
+    before the user gets a chance to re-auth."""
+    from backend.executor.utils import (
+        _validate_node_input_credentials,
+        is_credential_validation_error_message,
+    )
+
+    mock_node = mocker.MagicMock()
+    mock_node.id = "node-missing-auto-creds-key"
+    mock_node.credentials_optional = False
+    # Missing _credentials_id entirely — e.g. after a fork.
+    mock_node.input_default = {
+        "spreadsheet": {
+            "id": "file-123",
+            "name": "test.xlsx",
+        }
+    }
+
+    mock_block = mocker.MagicMock()
+    mock_block.input_schema.get_credentials_fields.return_value = {}
+    mock_block.input_schema.get_auto_credentials_fields.return_value = {
+        "credentials": {
+            "field_name": "spreadsheet",
+            "config": {"provider": "google", "type": "oauth2"},
+        }
+    }
+    mock_block.input_schema.get_required_fields.return_value = ["spreadsheet"]
+    mock_node.block = mock_block
+
+    mock_graph = mocker.MagicMock()
+    mock_graph.nodes = [mock_node]
+
+    errors, _ = await _validate_node_input_credentials(
+        graph=mock_graph,
+        user_id="some-user",
+        nodes_input_masks=None,
+    )
+
+    assert mock_node.id in errors
+    message = errors[mock_node.id]["spreadsheet"]
+    assert is_credential_validation_error_message(message)
 
 
 @pytest.mark.asyncio

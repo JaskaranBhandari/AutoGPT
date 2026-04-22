@@ -554,9 +554,11 @@ def test_combine_preserves_regular_credential_defaults():
 
 def test_reassign_ids_clears_credentials_id():
     """
-    [SECRT-1772] _reassign_ids should clear _credentials_id from
-    GoogleDriveFile-style input_default fields so forked agents
-    don't retain the original creator's credential references.
+    [SECRT-1772] _reassign_ids should null out the entire
+    GoogleDriveFile-style input_default field so forked agents
+    don't retain the original creator's credential references AND
+    don't leave a partial file object (which would be rejected by
+    the auto-credentials validator).
     """
     from backend.data.graph import GraphModel
 
@@ -584,15 +586,16 @@ def test_reassign_ids_clears_credentials_id():
 
     GraphModel._reassign_ids(graph, user_id="new-user", graph_id_map={})
 
-    # _credentials_id key should be removed (not set to None) so that
-    # _acquire_auto_credentials correctly errors instead of treating it as chained data
-    assert "_credentials_id" not in graph.nodes[0].input_default["spreadsheet"]
+    # The entire field is nulled — leaving a partial file object behind
+    # would be rejected by the auto-credentials validator, breaking
+    # fork_graph() for agents that previously had a picker-selected file.
+    assert graph.nodes[0].input_default["spreadsheet"] is None
 
 
 def test_reassign_ids_preserves_non_credential_fields():
     """
-    Regression guard: _reassign_ids should NOT modify non-credential fields
-    like name, mimeType, id, url.
+    Regression guard: _reassign_ids should NOT null fields that don't
+    carry a _credentials_id (e.g., plain user-entered values).
     """
     from backend.data.graph import GraphModel
 
@@ -600,12 +603,10 @@ def test_reassign_ids_preserves_non_credential_fields():
         id="node-1",
         block_id=StoreValueBlock().id,
         input_default={
-            "spreadsheet": {
-                "_credentials_id": "cred-abc",
+            # No _credentials_id — a plain dict that should be preserved
+            "config": {
                 "id": "file-123",
                 "name": "test.xlsx",
-                "mimeType": "application/vnd.google-apps.spreadsheet",
-                "url": "https://docs.google.com/spreadsheets/d/file-123",
             },
         },
     )
@@ -620,11 +621,8 @@ def test_reassign_ids_preserves_non_credential_fields():
 
     GraphModel._reassign_ids(graph, user_id="new-user", graph_id_map={})
 
-    field = graph.nodes[0].input_default["spreadsheet"]
-    assert field["id"] == "file-123"
-    assert field["name"] == "test.xlsx"
-    assert field["mimeType"] == "application/vnd.google-apps.spreadsheet"
-    assert field["url"] == "https://docs.google.com/spreadsheets/d/file-123"
+    field = graph.nodes[0].input_default["config"]
+    assert field == {"id": "file-123", "name": "test.xlsx"}
 
 
 def test_reassign_ids_handles_no_credentials():
@@ -693,8 +691,10 @@ def test_reassign_ids_handles_multiple_credential_fields():
 
     GraphModel._reassign_ids(graph, user_id="new-user", graph_id_map={})
 
-    assert "_credentials_id" not in graph.nodes[0].input_default["spreadsheet"]
-    assert "_credentials_id" not in graph.nodes[0].input_default["doc_file"]
+    # Each auto-credential field is nulled entirely — not just the id key —
+    # so the validator accepts the forked graph.
+    assert graph.nodes[0].input_default["spreadsheet"] is None
+    assert graph.nodes[0].input_default["doc_file"] is None
     assert graph.nodes[0].input_default["plain_input"] == "not a dict"
 
 
