@@ -1,27 +1,38 @@
-"""Web search tool — wraps Anthropic's server-side ``web_search`` beta.
+"""Web search tool — wraps OpenRouter's ``openrouter:web_search`` server tool.
 
-Single entry point for web search on both SDK and baseline paths.  The
-``web_search_20250305`` tool is server-side on Anthropic, so we call
-the Messages API directly regardless of which LLM invoked the copilot
-tool — OpenRouter can't proxy server-side tool execution.
+OpenRouter's server tool runs the search, injects results into the
+assistant message as ``url_citation`` annotations, and bills the search
+fee inside the same ``usage.cost`` line as the dispatch model.  Benefits:
+
+* real per-call billing (no hard-coded pricing constants here); and
+* the cost auto-flows through ``persist_and_record_usage`` into the
+  daily / weekly microdollar rate-limit counter on the same rails as
+  every other OpenRouter turn.
+
+The older ``plugins: [{id: "web"}]`` + ``:online`` API are deprecated
+upstream; the server tool is the supported path going forward.
 """
 
 import logging
 from typing import Any
 
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
+from backend.copilot.config import ChatConfig
 from backend.copilot.model import ChatSession
 from backend.copilot.token_tracking import persist_and_record_usage
-from backend.util.settings import Settings
+
+_chat_config = ChatConfig()
 
 from .base import BaseTool
 from .models import ErrorResponse, ToolResponseBase, WebSearchResponse, WebSearchResult
 
 logger = logging.getLogger(__name__)
 
-_WEB_SEARCH_DISPATCH_MODEL = "claude-haiku-3-5"
-_MAX_DISPATCH_TOKENS = 512
+# A small, cheap model is fine — it only has to decide-and-call the
+# server tool, not summarise anything.  Override via env if needed.
+_WEB_SEARCH_DISPATCH_MODEL = "openai/gpt-4o-mini"
+_MAX_DISPATCH_TOKENS = 64
 _DEFAULT_MAX_RESULTS = 5
 _HARD_MAX_RESULTS = 20
 
@@ -68,7 +79,7 @@ class WebSearchTool(BaseTool):
 
     @property
     def is_available(self) -> bool:
-        return bool(Settings().secrets.anthropic_api_key)
+        return bool(_chat_config.api_key and _chat_config.base_url)
 
     async def _execute(
         self,
@@ -93,44 +104,40 @@ class WebSearchTool(BaseTool):
             max_results = _DEFAULT_MAX_RESULTS
         max_results = max(1, min(max_results, _HARD_MAX_RESULTS))
 
-        api_key = Settings().secrets.anthropic_api_key
-        if not api_key:
+        if not _chat_config.api_key or not _chat_config.base_url:
             return ErrorResponse(
                 message=(
                     "Web search is unavailable — the deployment has no "
-                    "Anthropic API key configured."
+                    "OpenRouter credentials configured."
                 ),
                 error="web_search_not_configured",
                 session_id=session_id,
             )
 
-        client = AsyncAnthropic(api_key=api_key)
+        client = AsyncOpenAI(
+            api_key=_chat_config.api_key, base_url=_chat_config.base_url
+        )
         try:
-            resp = await client.messages.create(
+            resp = await client.chat.completions.create(
                 model=_WEB_SEARCH_DISPATCH_MODEL,
                 max_tokens=_MAX_DISPATCH_TOKENS,
-                tools=[
-                    {
-                        "type": "web_search_20250305",
-                        "name": "web_search",
-                        "max_uses": 1,
-                    }
-                ],
-                messages=[
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Use the web_search tool exactly once with the "
-                            f"query {query!r} and then stop.  Do not "
-                            f"summarise — the caller parses the raw "
-                            f"tool_result."
-                        ),
-                    }
-                ],
+                messages=[{"role": "user", "content": query}],
+                extra_body={
+                    "tools": [
+                        {
+                            "type": "openrouter:web_search",
+                            "openrouter:web_search": {
+                                "max_results": max_results,
+                            },
+                        }
+                    ],
+                    "tool_choice": "required",
+                    "usage": {"include": True},
+                },
             )
         except Exception as exc:
             logger.warning(
-                "[web_search] Anthropic call failed for query=%r: %s", query, exc
+                "[web_search] OpenRouter call failed for query=%r: %s", query, exc
             )
             return ErrorResponse(
                 message=f"Web search failed: {exc}",
@@ -138,20 +145,20 @@ class WebSearchTool(BaseTool):
                 session_id=session_id,
             )
 
-        results, search_requests = _extract_results(resp, limit=max_results)
+        results = _extract_results(resp, limit=max_results)
+        cost_usd = _extract_cost_usd(resp)
 
-        cost_usd = _estimate_cost_usd(resp, search_requests=search_requests)
         try:
             usage = getattr(resp, "usage", None)
             await persist_and_record_usage(
                 session=session,
                 user_id=user_id,
-                prompt_tokens=getattr(usage, "input_tokens", 0) or 0,
-                completion_tokens=getattr(usage, "output_tokens", 0) or 0,
+                prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
                 log_prefix="[web_search]",
                 cost_usd=cost_usd,
                 model=_WEB_SEARCH_DISPATCH_MODEL,
-                provider="anthropic",
+                provider="open_router",
             )
         except Exception as exc:
             logger.warning("[web_search] usage tracking failed: %s", exc)
@@ -160,79 +167,60 @@ class WebSearchTool(BaseTool):
             message=f"Found {len(results)} result(s) for {query!r}.",
             query=query,
             results=results,
-            search_requests=search_requests,
+            search_requests=1 if results else 0,
             session_id=session_id,
         )
 
 
-def _extract_results(resp: Any, *, limit: int) -> tuple[list[WebSearchResult], int]:
-    """Pull results + server-side request count from an Anthropic response."""
-    results: list[WebSearchResult] = []
-    search_requests = 0
+def _extract_results(resp: Any, *, limit: int) -> list[WebSearchResult]:
+    """Pull ``url_citation`` annotations from the OpenRouter response.
 
-    for block in getattr(resp, "content", []) or []:
-        btype = getattr(block, "type", None)
-        if btype == "web_search_tool_result":
-            content = getattr(block, "content", []) or []
-            for item in content:
-                if getattr(item, "type", None) != "web_search_result":
-                    continue
-                if len(results) >= limit:
-                    break
-                # Anthropic's ``web_search_result`` exposes only
-                # ``title``/``url``/``page_age`` plus an opaque
-                # ``encrypted_content`` blob that is meant for citation
-                # round-tripping, not for display — it is base64-ish
-                # binary and would show as gibberish if surfaced to the
-                # model or the frontend.  There is no plain-text snippet
-                # field in the current beta; callers get the readable
-                # text via the model's ``text`` blocks with citations,
-                # not via this list.  Leave ``snippet`` empty.
-                results.append(
-                    WebSearchResult(
-                        title=getattr(item, "title", "") or "",
-                        url=getattr(item, "url", "") or "",
-                        snippet="",
-                        page_age=getattr(item, "page_age", None),
-                    )
-                )
-
-    usage = getattr(resp, "usage", None)
-    server_tool_use = getattr(usage, "server_tool_use", None) if usage else None
-    if server_tool_use is not None:
-        search_requests = getattr(server_tool_use, "web_search_requests", 0) or 0
-
-    return results, search_requests
-
-
-# Update when Anthropic revises pricing.
-# Claude Haiku 3.5 rates: https://platform.claude.com/docs/en/about-claude/pricing
-_COST_PER_SEARCH_USD = 0.010  # $10 per 1,000 web_search requests
-_HAIKU_INPUT_USD_PER_MTOK = 0.25
-_HAIKU_CACHE_READ_USD_PER_MTOK = 0.03  # 10% of input
-_HAIKU_CACHE_WRITE_USD_PER_MTOK = 0.30  # 1.25x input, 5m TTL
-_HAIKU_OUTPUT_USD_PER_MTOK = 1.25
-
-
-def _estimate_cost_usd(resp: Any, *, search_requests: int) -> float:
-    """Per-search fee × count + Haiku dispatch tokens (cache-aware).
-
-    Anthropic's ``usage.input_tokens`` excludes cache reads and writes, so
-    the three buckets are billed at distinct rates.  Missing fields default
-    to zero — for example older response shapes without ``cache_*`` markers
-    simply bill only the fresh-input line.
+    OpenRouter's web plugin injects search results as annotations on the
+    assistant message: ``{type: "url_citation", url_citation: {url, title,
+    content, ...}}``.  Other annotation types (if any) are ignored.
     """
-    usage = getattr(resp, "usage", None)
-    input_tokens = getattr(usage, "input_tokens", 0) if usage else 0
-    output_tokens = getattr(usage, "output_tokens", 0) if usage else 0
-    cache_read = getattr(usage, "cache_read_input_tokens", 0) if usage else 0
-    cache_write = getattr(usage, "cache_creation_input_tokens", 0) if usage else 0
+    results: list[WebSearchResult] = []
+    choices = getattr(resp, "choices", []) or []
+    if not choices:
+        return results
 
-    search_cost = search_requests * _COST_PER_SEARCH_USD
-    inference_cost = (
-        (input_tokens / 1_000_000) * _HAIKU_INPUT_USD_PER_MTOK
-        + (cache_read / 1_000_000) * _HAIKU_CACHE_READ_USD_PER_MTOK
-        + (cache_write / 1_000_000) * _HAIKU_CACHE_WRITE_USD_PER_MTOK
-        + (output_tokens / 1_000_000) * _HAIKU_OUTPUT_USD_PER_MTOK
-    )
-    return round(search_cost + inference_cost, 6)
+    message = getattr(choices[0], "message", None)
+    annotations = getattr(message, "annotations", None) or []
+    for ann in annotations:
+        if len(results) >= limit:
+            break
+        ann_type = _get(ann, "type")
+        if ann_type != "url_citation":
+            continue
+        citation = _get(ann, "url_citation") or {}
+        results.append(
+            WebSearchResult(
+                title=_get(citation, "title") or "",
+                url=_get(citation, "url") or "",
+                snippet=(_get(citation, "content") or "")[:500],
+                page_age=None,
+            )
+        )
+    return results
+
+
+def _extract_cost_usd(resp: Any) -> float | None:
+    """Return the real per-call cost from OpenRouter's ``usage.cost`` field."""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return None
+    val = getattr(usage, "cost", None)
+    if val is None and hasattr(usage, "model_dump"):
+        val = usage.model_dump().get("cost")
+    try:
+        return float(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _get(obj: Any, key: str) -> Any:
+    """Uniform attribute / dict key access — OpenRouter's annotation shape
+    varies across SDK versions (dict for raw JSON, pydantic for parsed)."""
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)

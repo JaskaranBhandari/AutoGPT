@@ -1,9 +1,10 @@
 """Tests for the ``web_search`` copilot tool.
 
-Covers the result extractor + cost estimator as pure units (fed with
-synthetic Anthropic response objects), plus light integration tests that
-mock ``AsyncAnthropic.messages.create`` and confirm the handler plumbs
-through to ``persist_and_record_usage`` with the right provider tag.
+Covers the annotation extractor + cost extractor as pure units (fed with
+synthetic OpenRouter response objects), plus a light integration test
+that mocks ``AsyncOpenAI.chat.completions.create`` and confirms the
+handler plumbs through to ``persist_and_record_usage`` with
+``provider='open_router'`` and the real ``usage.cost`` value.
 """
 
 from types import SimpleNamespace
@@ -15,190 +16,150 @@ from backend.copilot.model import ChatSession
 
 from .models import ErrorResponse, WebSearchResponse, WebSearchResult
 from .web_search import (
-    _COST_PER_SEARCH_USD,
     WebSearchTool,
-    _estimate_cost_usd,
+    _extract_cost_usd,
     _extract_results,
 )
 
 
-def _fake_anthropic_response(
+def _fake_openrouter_response(
     *,
-    results: list[dict] | None = None,
-    search_requests: int = 1,
-    input_tokens: int = 120,
-    output_tokens: int = 40,
-    cache_read_input_tokens: int = 0,
-    cache_creation_input_tokens: int = 0,
+    citations: list[dict] | None = None,
+    prompt_tokens: int = 120,
+    completion_tokens: int = 40,
+    cost: float | None = 0.02,
 ) -> SimpleNamespace:
-    """Build a synthetic Anthropic Messages response.
+    """Build a synthetic OpenRouter Chat Completions response.
 
-    Matches the shape produced by ``client.messages.create`` when the
-    response includes a ``web_search_tool_result`` content block and
-    ``usage.server_tool_use.web_search_requests`` on the turn meter.
+    Matches the shape produced by ``AsyncOpenAI.chat.completions.create``
+    when the ``openrouter:web_search`` server tool runs: search results
+    arrive as ``url_citation`` annotations on ``choices[0].message``,
+    and ``usage.cost`` carries the real billed cost (tokens + search fee).
     """
-    content = []
-    if results is not None:
-        content.append(
-            SimpleNamespace(
-                type="web_search_tool_result",
-                content=[
-                    SimpleNamespace(
-                        type="web_search_result",
-                        title=r.get("title", "untitled"),
-                        url=r.get("url", ""),
-                        encrypted_content=r.get("snippet", ""),
-                        page_age=r.get("page_age"),
-                    )
-                    for r in results
-                ],
-            )
+    annotations = []
+    for c in citations or []:
+        annotations.append(
+            {
+                "type": "url_citation",
+                "url_citation": {
+                    "url": c.get("url", ""),
+                    "title": c.get("title", "untitled"),
+                    "content": c.get("content", ""),
+                },
+            }
         )
-    usage = SimpleNamespace(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        cache_read_input_tokens=cache_read_input_tokens,
-        cache_creation_input_tokens=cache_creation_input_tokens,
-        server_tool_use=SimpleNamespace(web_search_requests=search_requests),
+    message = SimpleNamespace(
+        role="assistant",
+        content="ok",
+        annotations=annotations,
     )
-    return SimpleNamespace(content=content, usage=usage)
+    choices = [SimpleNamespace(message=message, finish_reason="stop")]
+    usage = SimpleNamespace(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        cost=cost,
+    )
+    return SimpleNamespace(choices=choices, usage=usage)
 
 
 class TestExtractResults:
-    """The extractor is the only Anthropic-response-shape contact point;
-    pin its behaviour so an API shape change surfaces here first."""
+    """Pin the annotation-shape contact point; an OpenRouter schema
+    change surfaces here first."""
 
-    def test_extracts_title_url_page_age_and_drops_encrypted_snippet(self):
-        # Anthropic's ``web_search_result`` ships an opaque
-        # ``encrypted_content`` blob that is not safe to surface —
-        # the extractor must drop it (snippet=="") regardless of
-        # whether the blob is non-empty.
-        resp = _fake_anthropic_response(
-            results=[
+    def test_extracts_title_url_snippet(self):
+        resp = _fake_openrouter_response(
+            citations=[
                 {
                     "title": "Kimi K2.6 launch",
                     "url": "https://example.com/kimi",
-                    "snippet": "EiJjbGF1ZGUtZW5jcnlwdGVkLWJsb2I=",
-                    "page_age": "1 day",
+                    "content": "Moonshot released K2.6 on 2026-04-20.",
                 },
                 {
                     "title": "OpenRouter pricing",
                     "url": "https://openrouter.ai/moonshotai/kimi-k2.6",
-                    "snippet": "",
+                    "content": "",
                 },
             ]
         )
-        out, requests = _extract_results(resp, limit=10)
-        assert requests == 1
+        out = _extract_results(resp, limit=10)
         assert len(out) == 2
         assert out[0].title == "Kimi K2.6 launch"
         assert out[0].url == "https://example.com/kimi"
-        assert out[0].snippet == ""
-        assert out[0].page_age == "1 day"
+        assert out[0].snippet.startswith("Moonshot released")
         assert out[1].snippet == ""
 
     def test_limit_caps_returned_results(self):
-        resp = _fake_anthropic_response(
-            results=[{"title": f"r{i}", "url": f"https://e/{i}"} for i in range(10)]
+        resp = _fake_openrouter_response(
+            citations=[
+                {"title": f"r{i}", "url": f"https://e/{i}"} for i in range(10)
+            ]
         )
-        out, _ = _extract_results(resp, limit=3)
+        out = _extract_results(resp, limit=3)
         assert len(out) == 3
         assert [r.title for r in out] == ["r0", "r1", "r2"]
 
-    def test_missing_content_returns_empty(self):
-        resp = SimpleNamespace(content=[], usage=None)
-        out, requests = _extract_results(resp, limit=10)
+    def test_missing_choices_returns_empty(self):
+        resp = SimpleNamespace(choices=[], usage=None)
+        out = _extract_results(resp, limit=10)
         assert out == []
-        assert requests == 0
 
-    def test_non_search_blocks_are_ignored(self):
+    def test_non_url_citation_annotations_are_ignored(self):
         resp = SimpleNamespace(
-            content=[
-                SimpleNamespace(type="text", text="Here's what I found..."),
+            choices=[
                 SimpleNamespace(
-                    type="web_search_tool_result",
-                    content=[
-                        SimpleNamespace(
-                            type="web_search_result",
-                            title="real",
-                            url="https://real.example",
-                            encrypted_content="body",
-                            page_age=None,
-                        )
-                    ],
-                ),
+                    message=SimpleNamespace(
+                        role="assistant",
+                        content="ok",
+                        annotations=[
+                            {"type": "file_citation", "file_citation": {}},
+                            {
+                                "type": "url_citation",
+                                "url_citation": {
+                                    "url": "https://real.example",
+                                    "title": "real",
+                                    "content": "body",
+                                },
+                            },
+                        ],
+                    )
+                )
             ],
             usage=None,
         )
-        out, _ = _extract_results(resp, limit=10)
+        out = _extract_results(resp, limit=10)
         assert len(out) == 1 and out[0].title == "real"
 
 
-class TestEstimateCostUsd:
-    """Pin the per-search fee + Haiku inference math — the pricing
-    constants in ``web_search.py`` are hard-coded (no live lookup) so a
-    drift between Anthropic's schedule and our constants must surface
-    in this test for the next reader to notice."""
+class TestExtractCostUsd:
+    """Read real ``usage.cost`` from OpenRouter — no hard-coded rates,
+    so a future provider price change is automatically reflected."""
 
-    def test_zero_searches_still_charges_inference(self):
-        resp = _fake_anthropic_response(results=[], search_requests=0)
-        cost = _estimate_cost_usd(resp, search_requests=0)
-        # Haiku at 1000 input / 5000 output tokens = tiny but non-zero.
-        assert 0 < cost < 0.001
+    def test_returns_cost_value(self):
+        resp = _fake_openrouter_response(cost=0.023456)
+        assert _extract_cost_usd(resp) == pytest.approx(0.023456)
 
-    def test_single_search_fee_dominates(self):
-        resp = _fake_anthropic_response(
-            results=[{"title": "x", "url": "https://e"}],
-            search_requests=1,
-            input_tokens=100,
-            output_tokens=20,
-        )
-        cost = _estimate_cost_usd(resp, search_requests=1)
-        # ~$0.010 search + trivial inference — total still ~1 cent.
-        assert cost >= _COST_PER_SEARCH_USD
-        assert cost < _COST_PER_SEARCH_USD + 0.001
+    def test_returns_none_when_usage_missing(self):
+        resp = SimpleNamespace(choices=[], usage=None)
+        assert _extract_cost_usd(resp) is None
 
-    def test_three_searches_linear_in_count(self):
-        resp = _fake_anthropic_response(
-            results=[], search_requests=3, input_tokens=0, output_tokens=0
-        )
-        cost = _estimate_cost_usd(resp, search_requests=3)
-        assert cost == pytest.approx(3 * _COST_PER_SEARCH_USD)
+    def test_returns_none_when_cost_missing(self):
+        usage = SimpleNamespace(prompt_tokens=10, completion_tokens=5)
+        resp = SimpleNamespace(choices=[], usage=usage)
+        assert _extract_cost_usd(resp) is None
 
-    def test_cache_tokens_billed_distinctly(self):
-        # 1M fresh-input tokens vs 1M cache-read vs 1M cache-write should
-        # produce three distinct line items — miscounting any of them would
-        # under- or over-bill users at the daily/weekly budget gate.
-        fresh = _fake_anthropic_response(
-            search_requests=0, input_tokens=1_000_000, output_tokens=0
-        )
-        cache_read = _fake_anthropic_response(
-            search_requests=0,
-            input_tokens=0,
-            output_tokens=0,
-            cache_read_input_tokens=1_000_000,
-        )
-        cache_write = _fake_anthropic_response(
-            search_requests=0,
-            input_tokens=0,
-            output_tokens=0,
-            cache_creation_input_tokens=1_000_000,
-        )
-        c_fresh = _estimate_cost_usd(fresh, search_requests=0)
-        c_read = _estimate_cost_usd(cache_read, search_requests=0)
-        c_write = _estimate_cost_usd(cache_write, search_requests=0)
-        # Read is discounted (~10% of fresh), write is a premium (~1.25x).
-        assert c_read < c_fresh < c_write
-        assert c_read == pytest.approx(c_fresh * 0.12, rel=0.05)
-        assert c_write == pytest.approx(c_fresh * 1.2, rel=0.05)
+    def test_survives_string_cost(self):
+        # OpenRouter has shipped both float and string ``cost`` at
+        # different points; coerce safely.
+        usage = SimpleNamespace(cost="0.017")
+        resp = SimpleNamespace(choices=[], usage=usage)
+        assert _extract_cost_usd(resp) == pytest.approx(0.017)
 
 
 class TestWebSearchToolDispatch:
-    """Lightweight integration test: mock the Anthropic client, confirm
+    """Lightweight integration test: mock the OpenAI client, confirm
     the handler returns a ``WebSearchResponse`` and the usage tracker is
-    called with ``provider='anthropic'`` (not 'open_router', even on the
-    baseline path — server-side web_search bills Anthropic regardless of
-    the calling LLM's route)."""
+    called with ``provider='open_router'`` and the real ``usage.cost``."""
 
     def _session(self) -> ChatSession:
         s = ChatSession.new("test-user", dry_run=False)
@@ -207,37 +168,45 @@ class TestWebSearchToolDispatch:
 
     @pytest.mark.asyncio
     async def test_returns_response_with_results_and_tracks_cost(self, monkeypatch):
-        fake_resp = _fake_anthropic_response(
-            results=[
+        fake_resp = _fake_openrouter_response(
+            citations=[
                 {
                     "title": "hello",
                     "url": "https://example.com",
-                    "snippet": "greeting",
+                    "content": "greeting",
                 }
             ],
-            search_requests=1,
+            cost=0.0214,
         )
         mock_client = type(
             "MC",
             (),
             {
-                "messages": type(
-                    "M", (), {"create": AsyncMock(return_value=fake_resp)}
+                "chat": type(
+                    "C",
+                    (),
+                    {
+                        "completions": type(
+                            "CC",
+                            (),
+                            {"create": AsyncMock(return_value=fake_resp)},
+                        )()
+                    },
                 )()
             },
         )()
 
-        # Stub the Anthropic API key so ``is_available`` is True.
         monkeypatch.setattr(
-            "backend.copilot.tools.web_search.Settings",
-            lambda: SimpleNamespace(
-                secrets=SimpleNamespace(anthropic_api_key="sk-test")
+            "backend.copilot.tools.web_search._chat_config",
+            SimpleNamespace(
+                api_key="sk-test",
+                base_url="https://openrouter.ai/api/v1",
             ),
         )
 
         with (
             patch(
-                "backend.copilot.tools.web_search.AsyncAnthropic",
+                "backend.copilot.tools.web_search.AsyncOpenAI",
                 return_value=mock_client,
             ),
             patch(
@@ -259,27 +228,26 @@ class TestWebSearchToolDispatch:
         assert isinstance(result.results[0], WebSearchResult)
         assert result.search_requests == 1
 
-        # Cost tracker must have been called with provider="anthropic".
+        # Cost tracker called with provider="open_router" and the real
+        # ``usage.cost`` value (NOT an estimate).
         assert mock_track.await_count == 1
         kwargs = mock_track.await_args.kwargs
-        assert kwargs["provider"] == "anthropic"
-        assert kwargs["model"] == "claude-haiku-3-5"
+        assert kwargs["provider"] == "open_router"
+        assert kwargs["model"] == "openai/gpt-4o-mini"
         assert kwargs["user_id"] == "u1"
-        assert kwargs["cost_usd"] >= _COST_PER_SEARCH_USD
+        assert kwargs["cost_usd"] == pytest.approx(0.0214)
 
     @pytest.mark.asyncio
-    async def test_missing_api_key_returns_error_without_calling_anthropic(
-        self, monkeypatch
-    ):
+    async def test_missing_credentials_returns_error(self, monkeypatch):
         monkeypatch.setattr(
-            "backend.copilot.tools.web_search.Settings",
-            lambda: SimpleNamespace(secrets=SimpleNamespace(anthropic_api_key="")),
+            "backend.copilot.tools.web_search._chat_config",
+            SimpleNamespace(api_key="", base_url=""),
         )
-        anthropic_stub = AsyncMock()
+        openai_stub = AsyncMock()
         with (
             patch(
-                "backend.copilot.tools.web_search.AsyncAnthropic",
-                return_value=anthropic_stub,
+                "backend.copilot.tools.web_search.AsyncOpenAI",
+                return_value=openai_stub,
             ),
             patch(
                 "backend.copilot.tools.web_search.persist_and_record_usage",
@@ -295,21 +263,22 @@ class TestWebSearchToolDispatch:
             )
         assert isinstance(result, ErrorResponse)
         assert result.error == "web_search_not_configured"
-        anthropic_stub.messages.create.assert_not_called()
+        openai_stub.chat.completions.create.assert_not_called()
         mock_track.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_empty_query_rejected_without_api_call(self, monkeypatch):
         monkeypatch.setattr(
-            "backend.copilot.tools.web_search.Settings",
-            lambda: SimpleNamespace(
-                secrets=SimpleNamespace(anthropic_api_key="sk-test")
+            "backend.copilot.tools.web_search._chat_config",
+            SimpleNamespace(
+                api_key="sk-test",
+                base_url="https://openrouter.ai/api/v1",
             ),
         )
-        anthropic_stub = AsyncMock()
+        openai_stub = AsyncMock()
         with patch(
-            "backend.copilot.tools.web_search.AsyncAnthropic",
-            return_value=anthropic_stub,
+            "backend.copilot.tools.web_search.AsyncOpenAI",
+            return_value=openai_stub,
         ):
             tool = WebSearchTool()
             result = await tool._execute(
@@ -317,7 +286,7 @@ class TestWebSearchToolDispatch:
             )
         assert isinstance(result, ErrorResponse)
         assert result.error == "missing_query"
-        anthropic_stub.messages.create.assert_not_called()
+        openai_stub.chat.completions.create.assert_not_called()
 
 
 class TestToolRegistryIntegration:
