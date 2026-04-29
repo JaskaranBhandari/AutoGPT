@@ -587,28 +587,48 @@ jobs:
 
           PROFILE_EXISTS="false"
 
+          # Maximum size of an existing Wasabi profile that we will pull down
+          # at start. Anything bigger is considered "polluted" (cache crud /
+          # extension databases the cleanup step couldn't trim). We delete it
+          # from Wasabi and start fresh with the same UUID so the next run
+          # produces a clean profile of normal size.
+          MAX_PROFILE_BYTES=524288000  # 500 MB
+
           # Check if browser profile exists in Wasabi
           if [ -n "$WASABI_BUCKET" ] && [ "$WASABI_BUCKET" != "" ] && [ -n "$BROWSER_PROFILE_ID" ] && [ "$BROWSER_PROFILE_ID" != "" ]; then
             echo "Checking Wasabi for existing browser profile: $WASABI_KEY"
 
-            if aws s3 ls "s3://${WASABI_BUCKET}/${WASABI_KEY}" --endpoint-url "$WASABI_ENDPOINT" 2>/dev/null; then
-              echo "✅ Browser profile found in Wasabi! Downloading..."
-              PROFILE_EXISTS="true"
+            LS_OUTPUT=$(aws s3 ls "s3://${WASABI_BUCKET}/${WASABI_KEY}" --endpoint-url "$WASABI_ENDPOINT" 2>/dev/null)
+            if [ -n "$LS_OUTPUT" ]; then
+              # `aws s3 ls` columns: date time size key
+              EXISTING_BYTES=$(echo "$LS_OUTPUT" | awk '{print $3}')
+              EXISTING_BYTES=${EXISTING_BYTES:-0}
+              EXISTING_MB=$((EXISTING_BYTES / 1024 / 1024))
+              echo "  Existing Wasabi profile size: ${EXISTING_MB} MB (${EXISTING_BYTES} bytes)"
 
-              # Download the zip
-              aws s3 cp "s3://${WASABI_BUCKET}/${WASABI_KEY}" "/tmp/${BROWSER_PROFILE_ID}.zip" \
-                --endpoint-url "$WASABI_ENDPOINT"
-
-              echo "Extracting browser profile..."
-              unzip -o "/tmp/${BROWSER_PROFILE_ID}.zip" -d "$HOME/browser-profiles/"
-              rm -f "/tmp/${BROWSER_PROFILE_ID}.zip"
-
-              if [ -d "$PROFILE_DIR" ]; then
-                echo "✅ Browser profile extracted to: $PROFILE_DIR"
-                echo "  Profile size: $(du -sh "$PROFILE_DIR" | cut -f1)"
-              else
-                echo "⚠️ Extraction did not produce expected directory, creating fresh profile"
+              if [ "$EXISTING_BYTES" -gt "$MAX_PROFILE_BYTES" ] 2>/dev/null; then
+                echo "⚠️ Existing profile exceeds $((MAX_PROFILE_BYTES / 1024 / 1024)) MB limit — deleting from Wasabi and starting fresh"
+                aws s3 rm "s3://${WASABI_BUCKET}/${WASABI_KEY}" --endpoint-url "$WASABI_ENDPOINT" || true
                 PROFILE_EXISTS="false"
+              else
+                echo "✅ Browser profile within size limit — downloading..."
+                PROFILE_EXISTS="true"
+
+                # Download the zip
+                aws s3 cp "s3://${WASABI_BUCKET}/${WASABI_KEY}" "/tmp/${BROWSER_PROFILE_ID}.zip" \
+                  --endpoint-url "$WASABI_ENDPOINT"
+
+                echo "Extracting browser profile..."
+                unzip -o "/tmp/${BROWSER_PROFILE_ID}.zip" -d "$HOME/browser-profiles/"
+                rm -f "/tmp/${BROWSER_PROFILE_ID}.zip"
+
+                if [ -d "$PROFILE_DIR" ]; then
+                  echo "✅ Browser profile extracted to: $PROFILE_DIR"
+                  echo "  Profile size: $(du -sh "$PROFILE_DIR" | cut -f1)"
+                else
+                  echo "⚠️ Extraction did not produce expected directory, creating fresh profile"
+                  PROFILE_EXISTS="false"
+                fi
               fi
             else
               echo "No existing browser profile found in Wasabi"
@@ -1397,6 +1417,22 @@ jobs:
           \) -delete 2>/dev/null || true
 
           echo "  Profile size after cleanup: $(du -sh "$PROFILE_DIR" | cut -f1)"
+
+          # Hard size cap. If the profile is still bigger than this after cache
+          # cleanup, treat it as polluted and DON'T upload it back. We also
+          # delete any existing object so the next start does not pull a stale
+          # oversized snapshot. The next run starts fresh with the same UUID.
+          MAX_PROFILE_BYTES=524288000  # 500 MB
+          PROFILE_BYTES=$(du -sb "$PROFILE_DIR" | cut -f1)
+          PROFILE_MB=$((PROFILE_BYTES / 1024 / 1024))
+          echo "  Profile size after cleanup: ${PROFILE_MB} MB (${PROFILE_BYTES} bytes)"
+
+          if [ "$PROFILE_BYTES" -gt "$MAX_PROFILE_BYTES" ] 2>/dev/null; then
+            echo "❌ Profile is still > $((MAX_PROFILE_BYTES / 1024 / 1024)) MB after cleanup — skipping upload"
+            echo "   Deleting any existing Wasabi object so the next session starts fresh: s3://${WASABI_BUCKET}/${WASABI_KEY}"
+            aws s3 rm "s3://${WASABI_BUCKET}/${WASABI_KEY}" --endpoint-url "$WASABI_ENDPOINT" || true
+            exit 0
+          fi
 
           echo "Zipping browser profile: $PROFILE_DIR"
           cd "$HOME/browser-profiles"
